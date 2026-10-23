@@ -108,7 +108,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             checked.append({"lat": float(lat), "lon": float(lon)})
         request_body = json.dumps({"locations": checked, "costing": "pedestrian", "units": "kilometers"}).encode("utf-8")
-        upstream_request = urllib.request.Request("https://valhalla.openstreetmap.de/route", data=request_body, headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "FootpathMap/1.3"}, method="POST")
+        upstream_request = urllib.request.Request("https://valhalla1.openstreetmap.de/route", data=request_body, headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "FootpathMap/1.3", "X-Client-Id": "footpath-map.onrender.com"}, method="POST")
         try:
             with urllib.request.urlopen(upstream_request, timeout=25) as upstream:
                 result = json.loads(upstream.read(4000000).decode("utf-8"))
@@ -183,7 +183,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(data)
             except urllib.error.HTTPError as exc:
                 status = 503 if exc.code == 429 else 502
-                self.send_error(status, "OS Maps tile request was rejected")
+                reason = "OS Maps API key rejected (HTTP 401/403)" if exc.code in (401, 403) else ("OS Maps API rate limit reached" if exc.code == 429 else f"OS Maps tile request failed (HTTP {exc.code})")
+                self.send_error(status, reason)
             except (urllib.error.URLError, TimeoutError, OSError):
                 self.send_error(502, "OS Maps tile service is temporarily unavailable")
             return
