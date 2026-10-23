@@ -122,6 +122,20 @@ class CalculationTests(unittest.TestCase):
     def test_temperature_conversion(self):
         result = calculate("/api/convert/unit", {"category":"temperature","value":100,"from_unit":"C","to_unit":"F"})
         self.assertAlmostEqual(result["value"], 212)
+    def test_gps_distance_same_point(self):
+        result = calculate("/api/calculate/gps-distance", {"lat1":51.5,"lon1":-0.1,"lat2":51.5,"lon2":-0.1})
+        self.assertAlmostEqual(result["distance_m"], 0)
+
+    def test_track_stats_distance_and_elevation(self):
+        result = calculate("/api/calculate/track-stats", {"coordinates":[[-0.1,51.5,100],[-0.11,51.51,110],[-0.12,51.52,105]]})
+        self.assertEqual(result["point_count"], 3)
+        self.assertGreater(result["distance_m"], 0)
+        self.assertAlmostEqual(result["ascent_m"], 10)
+        self.assertAlmostEqual(result["descent_m"], 5)
+
+    def test_gps_distance_rejects_invalid_coordinates(self):
+        with self.assertRaises(ValueError):
+            calculate("/api/calculate/gps-distance", {"lat1":100,"lon1":0,"lat2":0,"lon2":0})
     def test_rejects_nan(self):
         with self.assertRaises(ValueError):
             calculate("/api/calculate/battery-energy", {
