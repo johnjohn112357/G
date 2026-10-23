@@ -1,0 +1,12 @@
+services:
+  woods-route-planner:
+    build:
+      context: ./woods-route
+      dockerfile: Dockerfile
+    container_name: woods-route-planner
+    ports:
+      - "10000:10000"
+    environment:
+      PORT: "10000"
+      WOODS_NO_BROWSER: "1"
+    restart: unless-stopped
