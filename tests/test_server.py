@@ -45,6 +45,42 @@ class CalculationTests(unittest.TestCase):
         })
         self.assertAlmostEqual(result["power_w"], 1047.1975512, places=5)
 
+    def test_battery_runtime(self):
+        result = calculate("/api/calculate/battery-runtime", {
+            "capacity_ah": 20, "current_a": 5
+        })
+        self.assertAlmostEqual(result["ideal_runtime_hours"], 4)
+
+    def test_kinetic_energy(self):
+        result = calculate("/api/calculate/kinetic-energy", {
+            "mass_kg": 100, "speed_kmh": 36
+        })
+        self.assertAlmostEqual(result["kinetic_energy_j"], 5000)
+
+    def test_torque_from_power(self):
+        result = calculate("/api/calculate/torque-from-power", {
+            "power_w": 1000, "rpm": 1000
+        })
+        self.assertAlmostEqual(result["torque_nm"], 9.5492966, places=6)
+
+    def test_gear_ratio(self):
+        result = calculate("/api/calculate/gear-ratio", {
+            "input_rpm": 3000, "output_rpm": 1000
+        })
+        self.assertAlmostEqual(result["reduction_ratio"], 3)
+
+    def test_wheel_circumference(self):
+        result = calculate("/api/calculate/wheel-circumference", {
+            "wheel_diameter_mm": 200
+        })
+        self.assertAlmostEqual(result["circumference_mm"], math.pi * 200)
+
+    def test_battery_runtime_rejects_zero_current(self):
+        with self.assertRaises(ValueError):
+            calculate("/api/calculate/battery-runtime", {
+                "capacity_ah": 20, "current_a": 0
+            })
+
     def test_rejects_nan(self):
         with self.assertRaises(ValueError):
             calculate("/api/calculate/battery-energy", {
