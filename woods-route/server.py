@@ -38,7 +38,7 @@ document.getElementById('gps').onclick=()=>{if(!navigator.geolocation){status('T
 document.getElementById('stopgps').onclick=()=>{if(gpsWatch!==null)navigator.geolocation.clearWatch(gpsWatch);gpsWatch=null;status('Live GPS stopped. Last position remains on the map.')};
 document.getElementById('route').onclick=async()=>{if(!start||!end){status('Set start and destination first. Use live GPS or tap the map twice.');return}status('Calculating trail-priority walking route…');try{const r=await fetch('/api/route',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start:{lat:start.lat,lng:start.lng},end:{lat:end.lat,lng:end.lng}})}),d=await r.json();if(!r.ok)throw Error(d.error||'Routing failed');if(routeLine)map.removeLayer(routeLine);routeLine=L.geoJSON(d.geometry,{style:{color:'#2468b4',weight:5,opacity:.9}}).addTo(map);map.fitBounds(routeLine.getBounds(),{padding:[25,25]});status('Route: '+d.distance_km.toFixed(2)+' km · approx. '+Math.round(d.duration_min)+' min. '+d.note)}catch(e){status('Route failed: '+e.message)}};
 document.getElementById('clear').onclick=()=>{start=end=null;[startMarker,endMarker,routeLine].forEach(x=>{if(x)map.removeLayer(x)});startMarker=endMarker=routeLine=null;status('Route pins cleared. Live GPS marker remains if active.')};
-document.getElementById('nearwoods').onclick=async()=>{const center=currentGPS||start;if(!center){status('First tap Show my location (live GPS) and allow location access.');return}const km=Number(document.getElementById('radius').value);status('Searching for mapped woods within '+km+' km…');try{const r=await fetch('/api/nearby-woods?lat='+center.lat+'&lon='+center.lng+'&radius='+km);const d=await r.json();if(!r.ok)throw Error(d.error||'Woodland search failed');if(nearbyWoodsLayer)map.removeLayer(nearbyWoodsLayer);if(nearbyCircle)map.removeLayer(nearbyCircle);nearbyWoodsLayer=L.geoJSON(d.woods,{style:{color:'#245b2a',weight:2,fillColor:'#79b96b',fillOpacity:.5},onEachFeature:(f,l)=>{const p=f.properties||{};l.bindPopup('<b>'+(p.name||'Unnamed woodland')+'</b><br>'+((p.distance_km??'?')+' km from your location')+'<br>'+(p.kind||'Woodland'));}}).addTo(map);nearbyCircle=L.circle(center,{radius:km*1000,color:'#386f9b',weight:1,fillOpacity:.03}).addTo(map);if(d.woods.features.length){const bounds=nearbyWoodsLayer.getBounds();bounds.extend(center);map.fitBounds(bounds,{padding:[20,20]});status('Found '+d.count+' mapped woodland areas within '+km+' km. Tap a green area for details.')}else{map.setView(center,Math.max(10,15-Math.round(Math.log2(km))));status('No mapped woodland polygons found within '+km+' km. Try a larger radius or another map area.')}}catch(e){status('Nearby woods search failed: '+e.message)}};
+document.getElementById('nearwoods').onclick=async()=>{const center=currentGPS||start;if(!center){status('First tap Show my location (live GPS) and allow location access.');return}const km=Number(document.getElementById('radius').value);status('Searching for mapped woods within '+km+' km…');try{const r=await fetch('/api/nearby-woods?lat='+center.lat+'&lon='+center.lng+'&radius='+km);const d=await r.json();if(!r.ok)throw Error(d.error||'Woodland search failed');if(nearbyWoodsLayer)map.removeLayer(nearbyWoodsLayer);if(nearbyCircle)map.removeLayer(nearbyCircle);nearbyWoodsLayer=L.geoJSON(d.woods,{style:f=>{const src=f.properties?.source||'';return src==='Ancient Woodland'?{color:'#8b3fb0',weight:3,fillColor:'#bb75d6',fillOpacity:.48}:src==='National Forest Inventory'?{color:'#235da8',weight:2,fillColor:'#5d9fe0',fillOpacity:.35}:{color:'#245b2a',weight:2,fillColor:'#79b96b',fillOpacity:.5}},pointToLayer:(f,ll)=>L.circleMarker(ll,{radius:6,color:f.properties?.source==='Ancient Woodland'?'#8b3fb0':f.properties?.source==='National Forest Inventory'?'#235da8':'#245b2a',fillOpacity:.85}),onEachFeature:(f,l)=>{const p=f.properties||{};l.bindPopup('<b>'+(p.name||'Unnamed woodland')+'</b><br>'+((p.distance_km??'?')+' km from your location')+'<br>'+(p.kind||'Woodland')+'<br><small>Source: '+(p.source||'OpenStreetMap')+'</small>');}}).addTo(map);nearbyCircle=L.circle(center,{radius:km*1000,color:'#386f9b',weight:1,fillOpacity:.03}).addTo(map);if(d.woods.features.length){const bounds=nearbyWoodsLayer.getBounds();bounds.extend(center);map.fitBounds(bounds,{padding:[20,20]});status('Found '+d.count+' mapped woodland features within '+km+' km. Green = OpenStreetMap; blue = National Forest Inventory; purple = Ancient Woodland. Tap any area for details.'+(d.partial_sources?.length?' Some official data sources were unavailable: '+d.partial_sources.join(', ')+'.':''))}else{map.setView(center,Math.max(10,15-Math.round(Math.log2(km))));status('No mapped woodland polygons found within '+km+' km. Try a larger radius or another map area.')}}catch(e){status('Nearby woods search failed: '+e.message)}};
 document.getElementById('find').onclick=async()=>{const q=document.getElementById('search').value.trim();if(!q)return;status('Searching…');try{const r=await fetch('/api/search?q='+encodeURIComponent(q)),d=await r.json();if(!r.ok)throw Error(d.error||'Search failed');map.setView([d.lat,d.lon],14);status('Showing '+d.name)}catch(e){status('Search failed: '+e.message)}};
 </script></body></html>"""
 
@@ -91,47 +91,72 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 lat=float(q.get("lat",[""])[0]);lon=float(q.get("lon",[""])[0]);radius=float(q.get("radius",["5"])[0])
                 if not (-90<=lat<=90 and -180<=lon<=180) or not (1<=radius<=50):return self.send_json(400,{"error":"Invalid location or radius (1–50 km)."})
-                # Query the full radius bounding box, then retain every mapped woodland whose representative point is within the selected radius.
-                dlat=radius/111.0;dlon=radius/(111.0*max(0.15,abs(__import__("math").cos(__import__("math").radians(lat)))))
-                s,w,n,e=lat-dlat,lon-dlon,lat+dlat,lon+dlon
-                query=f"""[out:json][timeout:40];(way[landuse=forest]({s},{w},{n},{e});way[natural=wood]({s},{w},{n},{e});relation[landuse=forest]({s},{w},{n},{e});relation[natural=wood]({s},{w},{n},{e}););out center geom;"""
-                raw=fetch_json(OVERPASS,data=urllib.parse.urlencode({"data":query}).encode(),headers={"Content-Type":"application/x-www-form-urlencoded","User-Agent":"WoodsRoutePlanner/1.0"},timeout=50)
                 import math
+                dlat=radius/111.0;dlon=radius/(111.0*max(0.15,abs(math.cos(math.radians(lat)))))
+                south,west,north,east=lat-dlat,lon-dlon,lat+dlat,lon+dlon
+                query=f"""[out:json][timeout:40];(way[landuse=forest]({south},{west},{north},{east});way[natural=wood]({south},{west},{north},{east});relation[landuse=forest]({south},{west},{north},{east});relation[natural=wood]({south},{west},{north},{east}););out center geom;"""
+                raw=fetch_json(OVERPASS,data=urllib.parse.urlencode({"data":query}).encode(),headers={"Content-Type":"application/x-www-form-urlencoded","User-Agent":"WoodsRoutePlanner/1.0"},timeout=50)
                 features=[];seen=set()
+                def add_feature(geom,props,source):
+                    coords=[]
+                    def visit(v):
+                        if isinstance(v,(list,tuple)):
+                            if len(v)>=2 and isinstance(v[0],(int,float)) and isinstance(v[1],(int,float)):
+                                coords.append((float(v[0]),float(v[1])))
+                            else:
+                                for item in v:visit(item)
+                    visit(geom.get("coordinates",[]))
+                    if not coords:return
+                    clon=sum(p[0] for p in coords)/len(coords);clat=sum(p[1] for p in coords)/len(coords)
+                    dist=2*6371*math.asin(min(1,math.sqrt(math.sin(math.radians(clat-lat)/2)**2+math.cos(math.radians(lat))*math.cos(math.radians(clat))*math.sin(math.radians(clon-lon)/2)**2)))
+                    if dist>radius:return
+                    props=dict(props or {});props["source"]=source;props["distance_km"]=round(dist,2)
+                    features.append({"type":"Feature","geometry":geom,"properties":props})
                 for el in raw.get("elements",[]):
-                    key=(el.get("type"),el.get("id"))
+                    key=("osm",el.get("type"),el.get("id"))
                     if key in seen:continue
-                    seen.add(key)
-                    tags=el.get("tags",{});coords=[];geom=None
+                    seen.add(key);tags=el.get("tags",{});geom=None
                     if el.get("type")=="way":
                         coords=[[p["lon"],p["lat"]] for p in el.get("geometry",[]) if "lon" in p and "lat" in p]
-                        if len(coords)>=4 and coords[0]==coords[-1]:
-                            geom={"type":"Polygon","coordinates":[coords]}
+                        if len(coords)>=4 and coords[0]==coords[-1]:geom={"type":"Polygon","coordinates":[coords]}
                     elif el.get("type")=="relation":
-                        # Multipolygon relations often contain the actual woodland outline in outer member ways.
                         rings=[]
                         for member in el.get("members",[]):
                             if member.get("role")!="outer" or member.get("type")!="way":continue
                             ring=[[p["lon"],p["lat"]] for p in member.get("geometry",[]) if "lon" in p and "lat" in p]
                             if len(ring)>=4 and ring[0]==ring[-1]:rings.append(ring)
-                        if rings:
-                            geom={"type":"Polygon","coordinates":rings}
-                    center=el.get("center")
-                    if center:
-                        clon=float(center["lon"]);clat=float(center["lat"])
-                    elif coords:
-                        clon=sum(p[0] for p in coords)/len(coords);clat=sum(p[1] for p in coords)/len(coords)
-                    elif geom and geom["coordinates"] and geom["coordinates"][0]:
-                        ring=geom["coordinates"][0];clon=sum(p[0] for p in ring)/len(ring);clat=sum(p[1] for p in ring)/len(ring)
-                    else:continue
-                    dist=2*6371*math.asin(min(1,math.sqrt(math.sin(math.radians(clat-lat)/2)**2+math.cos(math.radians(lat))*math.cos(math.radians(clat))*math.sin(math.radians(clon-lon)/2)**2)))
-                    if dist>radius:continue
-                    if geom is None:geom={"type":"Point","coordinates":[clon,clat]}
-                    features.append({"type":"Feature","geometry":geom,"properties":{"osm_type":el.get("type"),"osm_id":el.get("id"),"name":tags.get("name","Unnamed woodland"),"kind":tags.get("natural") or tags.get("landuse") or "woodland","distance_km":round(dist,2)}})
-                return self.send_json(200,{"woods":{"type":"FeatureCollection","features":features},"count":len(features),"radius_km":radius})
+                        if rings:geom={"type":"Polygon","coordinates":rings}
+                    if geom is None and el.get("center"):geom={"type":"Point","coordinates":[el["center"]["lon"],el["center"]["lat"]]}
+                    if geom is None:continue
+                    add_feature(geom,{"osm_type":el.get("type"),"osm_id":el.get("id"),"name":tags.get("name","Unnamed woodland"),"kind":tags.get("natural") or tags.get("landuse") or "woodland"},"OpenStreetMap")
+                # Official inventories fill gaps in OSM. Query only the selected bounding box to keep responses bounded.
+                envelope=urllib.parse.quote(json.dumps({"xmin":west,"ymin":south,"xmax":east,"ymax":north,"spatialReference":{"wkid":4326}},separators=(",",":")))
+                arcgis_sources=[
+                    ("National Forest Inventory","https://services2.arcgis.com/mHXjwgl3OARRqqD4/ArcGIS/rest/services/National_Forest_Inventory_GB_2024/FeatureServer/0/query"),
+                    ("Ancient Woodland","https://services.arcgis.com/JJzESW51TqeY9uat/arcgis/rest/services/Ancient_Woodland_England/FeatureServer/0/query")
+                ]
+                official_errors=[]
+                for source,url in arcgis_sources:
+                    params=urllib.parse.urlencode({"where":"1=1","geometry":json.dumps({"xmin":west,"ymin":south,"xmax":east,"ymax":north,"spatialReference":{"wkid":4326}},separators=(",",":")),"geometryType":"esriGeometryEnvelope","inSR":"4326","spatialRel":"esriSpatialRelIntersects","outFields":"*","returnGeometry":"true","outSR":"4326","f":"geojson","resultRecordCount":"1000"})
+                    try:
+                        official=fetch_json(url+"?"+params,headers={"User-Agent":"WoodsRoutePlanner/1.0"},timeout=35)
+                        if official.get("error"):raise ValueError(official["error"].get("message","ArcGIS query error"))
+                        for feature in official.get("features",[]):
+                            props=feature.get("properties",{})
+                            if source=="National Forest Inventory":
+                                props["name"]=props.get("CATEGORY") or "Woodland (National Forest Inventory)"
+                                props["kind"]=props.get("CATEGORY") or "National Forest Inventory"
+                            else:
+                                props["name"]=props.get("NAME") or props.get("Name") or "Ancient woodland"
+                                props["kind"]="Ancient woodland"
+                            add_feature(feature.get("geometry") or {},props,source)
+                    except Exception as ex:
+                        print("Official woodland source %s failed: %s"%(source,ex),flush=True)
+                        official_errors.append(source)
+                return self.send_json(200,{"woods":{"type":"FeatureCollection","features":features},"count":len(features),"radius_km":radius,"sources":["OpenStreetMap"]+[x for x in ["National Forest Inventory","Ancient Woodland"] if x not in official_errors],"partial_sources":official_errors})
             except Exception as exc:
                 print("Nearby woodland search error: %s" % exc,flush=True)
-                return self.send_json(502,{"error":"OpenStreetMap woodland search is busy or unavailable. Try again."})
+                return self.send_json(502,{"error":"Woodland search failed. Try again in a moment."})
         if path=="/api/woods":
             try:
                 s,w,n,e=map(float,q.get("bbox",[""])[0].split(","))
