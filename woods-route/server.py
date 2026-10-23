@@ -16,7 +16,7 @@ OVERPASS_SERVERS=["https://overpass.kumi.systems/api/interpreter","https://overp
 VALHALLA="https://valhalla1.openstreetmap.de/route"
 TILE_RE=re.compile(r"^/api/tiles/(Leisure|Outdoor|Road|Light)/(\d{1,2})/(\d{1,7})/(\d{1,7})\.png$")
 
-HTML=r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Woods Route Planner</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><style>
+HTML=r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Woods Route Planner</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"><style>
 :root{color-scheme:light;--green:#214d35;--pale:#edf3e9;--ink:#17251b}*{box-sizing:border-box}body{margin:0;font:16px system-ui,sans-serif;color:var(--ink);background:#f8faf6}header{background:var(--green);color:white;padding:15px 18px}h1{font-size:1.25rem;margin:0}header p{margin:4px 0 0;font-size:.9rem;opacity:.9}main{display:grid;grid-template-columns:minmax(260px,340px) 1fr;min-height:calc(100vh - 78px)}aside{padding:16px;background:white;border-right:1px solid #d8e0d5;overflow:auto}label{display:block;font-weight:650;margin:12px 0 5px}input,select,button{font:inherit;width:100%;padding:11px;border:1px solid #bbc8b9;border-radius:9px;background:white;color:var(--ink)}button{background:var(--green);color:white;font-weight:700;border:0;margin-top:10px;cursor:pointer}button.secondary{background:var(--pale);color:var(--green);border:1px solid #c9d7c7}#map{height:calc(100vh - 78px);min-height:480px;background:#f4f5ef}.note{font-size:.86rem;color:#4b5d4d;line-height:1.45}.status{padding:10px;border-radius:8px;background:var(--pale);margin-top:12px;font-size:.9rem;white-space:pre-wrap}.legend{display:flex;gap:10px;align-items:center;font-size:.85rem;margin-top:12px}.swatch{width:15px;height:15px;border-radius:4px;background:#6f9c62;border:1px solid #456e3b}@media(max-width:760px){main{grid-template-columns:1fr;grid-template-rows:60vh auto}#map{height:60vh;min-height:360px}aside{border-right:0;border-top:1px solid #d8e0d5}header{padding:13px 15px}}
 </style></head><body><header><h1>🌲 Woods Route Planner</h1><p>Woodland map, trail-priority routes and live phone GPS.</p></header><main><aside>
 <p class="note">Tap the map to set start and destination. Turn on live GPS to show your current position as you move.</p>
@@ -27,10 +27,10 @@ HTML=r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="
 <label>Route preference</label><select id="mode"><option value="trails">Prefer trails and tracks; minimise road use</option></select>
 <button id="route">Plan route</button><button id="clear" class="secondary">Clear route and pins</button><div class="legend"><span class="swatch"></span> Mapped woodland</div><div id="status" class="status">Loading woodland data…</div>
 <p class="note">GPS requires permission in your phone browser and a secure HTTPS connection. Your position is shown on this map while live tracking is enabled. The map background uses OpenStreetMap tiles directly; woodland and path data also comes from OpenStreetMap. Routing prefers trails but cannot guarantee woodland-only travel or exclude all roads. Check local access signs; mapped paths do not prove legal right-of-way.</p>
-</aside><div id="map"></div></main><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
+</aside><div id="map"></div></main><script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script><script>
 const map=L.map('map').setView([51.815,-0.42],12);
-const osmTiles=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap contributors',maxZoom:19});
-osmTiles.on('tileerror',()=>status('OpenStreetMap tiles could not load. Check your connection or try refreshing.'));
+const osmTiles=L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{attribution:'&copy; OpenStreetMap contributors &copy; CARTO',subdomains:'abcd',maxZoom:20});
+osmTiles.on('tileerror',()=>status('Map tiles from CARTO could not load. Check your connection; woodland overlay is separate.'));
 osmTiles.addTo(map);
 const woods=L.geoJSON(null,{style:{color:'#416d3c',weight:1.5,fillColor:'#78a967',fillOpacity:.45},onEachFeature:(f,l)=>l.bindTooltip(f.properties?.name||'Woodland')}).addTo(map);
 const trails=L.geoJSON(null,{style:{color:'#8b6b42',weight:2,opacity:.9}}).addTo(map);
