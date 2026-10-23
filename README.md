@@ -34,6 +34,8 @@ A lightweight Python HTTP API for engineering calculations and a persistent evid
 - `POST /api/calculate/pressure`: `{"force_n":100,"area_m2":0.01}`
 - `POST /api/calculate/density`: `{"mass_kg":2,"volume_m3":0.001}`
 - `POST /api/convert/unit`: `{"category":"speed","value":60,"from_unit":"mph","to_unit":"km/h"}` (also length, mass, pressure, energy, power, volume and temperature)
+- `POST /api/calculate/gps-distance`: `{"lat1":51.5,"lon1":-0.1,"lat2":51.6,"lon2":-0.2}`
+- `POST /api/calculate/track-stats`: `{"coordinates":[[-0.1,51.5,100],[-0.11,51.51,110]]}` (GeoJSON coordinate order: longitude, latitude, optional elevation)
 
 
 ## Ordnance Survey (OS) Maps integration
