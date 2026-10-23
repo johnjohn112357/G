@@ -2,7 +2,7 @@
 import math
 import unittest
 
-from server import calculate
+from server import calculate, parse_os_tile_path
 
 
 class CalculationTests(unittest.TestCase):
@@ -80,6 +80,18 @@ class CalculationTests(unittest.TestCase):
             calculate("/api/calculate/battery-runtime", {
                 "capacity_ah": 20, "current_a": 0
             })
+
+    def test_os_tile_path_valid(self):
+        self.assertEqual(parse_os_tile_path("/api/maps/os/Leisure/7/63/42.png"),
+                         ("Leisure", 7, 63, 42))
+
+    def test_os_tile_path_rejects_unknown_style(self):
+        with self.assertRaises(ValueError):
+            parse_os_tile_path("/api/maps/os/Unknown/7/63/42.png")
+
+    def test_os_tile_path_rejects_out_of_range_coordinates(self):
+        with self.assertRaises(ValueError):
+            parse_os_tile_path("/api/maps/os/Leisure/3/8/0.png")
 
     def test_rejects_nan(self):
         with self.assertRaises(ValueError):
