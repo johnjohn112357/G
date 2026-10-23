@@ -95,7 +95,7 @@ class Handler(BaseHTTPRequestHandler):
                 dlat=radius/111.0;dlon=radius/(111.0*max(0.15,abs(__import__("math").cos(__import__("math").radians(lat)))))
                 s,w,n,e=lat-dlat,lon-dlon,lat+dlat,lon+dlon
                 query=f"""[out:json][timeout:40];(way[landuse=forest]({s},{w},{n},{e});way[natural=wood]({s},{w},{n},{e});relation[landuse=forest]({s},{w},{n},{e});relation[natural=wood]({s},{w},{n},{e}););out center geom;"""
-                raw=fetch_json(OVERPASS,data=query.encode(),headers={"Content-Type":"application/x-www-form-urlencoded","User-Agent":"WoodsRoutePlanner/1.0"},timeout=50)
+                raw=fetch_json(OVERPASS,data=urllib.parse.urlencode({"data":query}).encode(),headers={"Content-Type":"application/x-www-form-urlencoded","User-Agent":"WoodsRoutePlanner/1.0"},timeout=50)
                 import math
                 features=[]
                 for el in raw.get("elements",[]):
@@ -121,7 +121,7 @@ class Handler(BaseHTTPRequestHandler):
                 s,w,n,e=map(float,q.get("bbox",[""])[0].split(","))
                 if n-s>.20 or e-w>.20:return self.send_json(400,{"error":"Zoom in closer to load woodland data"})
                 query=f"""[out:json][timeout:25];(way[landuse=forest]({s},{w},{n},{e});way[natural=wood]({s},{w},{n},{e});way[highway~"path|footway|track|bridleway|steps"]({s},{w},{n},{e}););out geom;"""
-                raw=fetch_json(OVERPASS,data=query.encode(),headers={"Content-Type":"application/x-www-form-urlencoded","User-Agent":"WoodsRoutePlanner/1.0"},timeout=35);woods=[];trails=[]
+                raw=fetch_json(OVERPASS,data=urllib.parse.urlencode({"data":query}).encode(),headers={"Content-Type":"application/x-www-form-urlencoded","User-Agent":"WoodsRoutePlanner/1.0"},timeout=35);woods=[];trails=[]
                 for el in raw.get("elements",[]):
                     f=feature(el)
                     if not f:continue
