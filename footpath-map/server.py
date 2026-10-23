@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small standalone OS Leisure map tile proxy and static web server."""
+"""Small standalone OS Raster tile proxy and static web server."""
 import os
 import re
 import urllib.error
@@ -11,11 +11,37 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parent
 PORT = int(os.environ.get("PORT", "8080"))
 OS_MAPS_API_KEY = os.environ.get("OS_MAPS_API_KEY", "").strip()
-TILE_RE = re.compile(r"^/api/tiles/Leisure/(\d{1,2})/(\d{1,7})/(\d{1,7})\.png$")
+TILE_RE = re.compile(r"^/api/tiles/(Leisure|Outdoor|Road|Light)/(\\d{1,2})/(\\d{1,7})/(\\d{1,7})\\.png$")
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "FootpathMap/1.0"
+    server_version = "FootpathMap/1.1"
+
+    def _send_page_headers(self, body_length):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", str(body_length))
+        self.end_headers()
+
+    def do_HEAD(self):
+        """Support platform health probes without downloading page or map tiles."""
+        path = urlparse(self.path).path
+        if path in ("/", "/index.html"):
+            try:
+                body_length = (ROOT / "index.html").stat().st_size
+            except OSError:
+                self.send_error(500, "Map page unavailable")
+                return
+            self._send_page_headers(body_length)
+            return
+        if path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            return
+        self.send_error(404, "Not found")
 
     def do_GET(self):
         path = urlparse(self.path).path
@@ -25,24 +51,23 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 self.send_error(500, "Map page unavailable")
                 return
+            self._send_page_headers(len(body))
+            self.wfile.write(body)
+            return
+
+        if path == "/health":
+            body = b"ok"
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
             return
 
-        if path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(b"ok")
-            return
-
         match = TILE_RE.match(path)
         if match:
-            z, x, y = map(int, match.groups())
+            style, z_text, x_text, y_text = match.groups()
+            z, x, y = int(z_text), int(x_text), int(y_text)
             if z > 18 or x >= (1 << z) or y >= (1 << z):
                 self.send_error(400, "Invalid tile coordinates")
                 return
@@ -51,12 +76,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             url = (
                 "https://api.os.uk/maps/raster/v1/zxy/"
-                f"Leisure_3857/{z}/{x}/{y}.png"
+                f"{style}_3857/{z}/{x}/{y}.png"
                 f"?key={OS_MAPS_API_KEY}"
             )
             request = urllib.request.Request(
                 url,
-                headers={"User-Agent": "FootpathMap/1.0 (OS Maps tile proxy)"},
+                headers={"User-Agent": "FootpathMap/1.1 (OS Maps tile proxy)"},
             )
             try:
                 with urllib.request.urlopen(request, timeout=12) as upstream:
@@ -79,7 +104,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404, "Not found")
 
     def log_message(self, fmt, *args):
-        # Keep normal request logs, but never log query strings or secrets.
+        # Never log query strings or secrets.
         super().log_message(fmt, *args)
 
 
