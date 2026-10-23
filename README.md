@@ -22,6 +22,16 @@ A lightweight Python HTTP API for engineering calculations and a persistent evid
 - `POST /api/calculate/ohms-law`: provide any two of `voltage_v`, `current_a`, `resistance_ohm`
 - `POST /api/calculate/voltage-drop`: `{"current_a":10,"resistance_ohm":0.02}`
 - `POST /api/calculate/mechanical-power`: `{"torque_nm":10,"rpm":1000}`
+- `POST /api/calculate/battery-runtime`: `{"capacity_ah":20,"current_a":5}` (ideal hours; real-world caveats returned)
+- `POST /api/calculate/kinetic-energy`: `{"mass_kg":100,"speed_kmh":36}`
+- `POST /api/calculate/torque-from-power`: `{"power_w":1000,"rpm":1000}`
+- `POST /api/calculate/gear-ratio`: `{"input_rpm":3000,"output_rpm":1000}`
+- `POST /api/calculate/wheel-circumference`: `{"wheel_diameter_mm":200}`
+
+## Development checks
+- Run locally: `python -m compileall -q .`
+- Run regression suite: `python -m unittest discover -s tests -v`
+- GitHub Actions runs compilation and regression tests on pushes to the main and toolkit development branches, and on pull requests to main.
 
 ## Safety and limits
 Calculations are idealised engineering estimates, not safety certifications. Validate inputs and independent assumptions before use. API key auth and in-process rate limiting are basic safeguards, not a substitute for a production gateway/WAF. Do not expose without setting a strong API key. Free hosting may sleep and does not imply durable storage.
