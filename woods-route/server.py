@@ -131,4 +131,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:return self.send_json(502,{"error":str(e)[:240] or "Could not calculate route"})
     def log_message(self, fmt, *args):print("%s - %s"%(self.address_string(),fmt%args),flush=True)
 
-if __name__=="__main__":ThreadingHTTPServer(("0.0.0.0",PORT),Handler).serve_forever()
+if __name__=="__main__":
+    import threading, webbrowser
+    if not os.environ.get("RENDER") and os.environ.get("WOODS_NO_BROWSER")!="1":
+        threading.Timer(1.0,lambda:webbrowser.open("http://127.0.0.1:"+str(PORT))).start()
+    print("Woods Route Planner is listening on port %s" % PORT,flush=True)
+    ThreadingHTTPServer(("0.0.0.0",PORT),Handler).serve_forever()
