@@ -12,7 +12,7 @@ socket.getaddrinfo = _ipv4_getaddrinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT=int(os.environ.get("PORT","10000"))
 OS_MAPS_API_KEY=os.environ.get("OS_MAPS_API_KEY","").strip()  # retained for compatibility; basemap now uses OpenStreetMap
-OVERPASS="https://overpass-api.de/api/interpreter"
+OVERPASS_SERVERS=["https://overpass.kumi.systems/api/interpreter","https://overpass-api.de/api/interpreter"]
 VALHALLA="https://valhalla1.openstreetmap.de/route"
 TILE_RE=re.compile(r"^/api/tiles/(Leisure|Outdoor|Road|Light)/(\d{1,2})/(\d{1,7})/(\d{1,7})\.png$")
 
@@ -53,6 +53,17 @@ document.getElementById('find').onclick=async()=>{const q=document.getElementByI
 def fetch_json(url,data=None,headers=None,timeout=30):
     req=urllib.request.Request(url,data=data,headers=headers or {},method="POST" if data is not None else "GET")
     with urllib.request.urlopen(req,timeout=timeout) as r:return json.loads(r.read().decode())
+
+def fetch_overpass(query,timeout=40):
+    payload=urllib.parse.urlencode({"data":query}).encode()
+    headers={"Content-Type":"application/x-www-form-urlencoded","User-Agent":"WoodsRoutePlanner/1.0"}
+    errors=[]
+    for endpoint in OVERPASS_SERVERS:
+        try:
+            return fetch_json(endpoint,data=payload,headers=headers,timeout=timeout)
+        except Exception as exc:
+            errors.append(str(exc))
+    raise RuntimeError("All woodland query servers failed: "+"; ".join(errors))
 def osm_geometry(el):
     tags=el.get("tags",{})
     if el["type"]=="way":
@@ -103,7 +114,7 @@ class Handler(BaseHTTPRequestHandler):
                 dlat=radius/111.0;dlon=radius/(111.0*max(0.15,abs(math.cos(math.radians(lat)))))
                 south,west,north,east=lat-dlat,lon-dlon,lat+dlat,lon+dlon
                 query=f"""[out:json][timeout:40];(way[landuse=forest]({south},{west},{north},{east});way[natural=wood]({south},{west},{north},{east});relation[landuse=forest]({south},{west},{north},{east});relation[natural=wood]({south},{west},{north},{east}););out center geom;"""
-                raw=fetch_json(OVERPASS,data=urllib.parse.urlencode({"data":query}).encode(),headers={"Content-Type":"application/x-www-form-urlencoded","User-Agent":"WoodsRoutePlanner/1.0"},timeout=50)
+                raw=fetch_overpass(query,timeout=50)
                 features=[];seen=set()
                 def add_feature(geom,props,source):
                     coords=[]
@@ -170,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
                 s,w,n,e=map(float,q.get("bbox",[""])[0].split(","))
                 if n-s>.20 or e-w>.20:return self.send_json(400,{"error":"Zoom in closer to load woodland data"})
                 query=f"""[out:json][timeout:25];(way[landuse=forest]({s},{w},{n},{e});way[natural=wood]({s},{w},{n},{e});way[highway~"path|footway|track|bridleway|steps"]({s},{w},{n},{e}););out geom;"""
-                raw=fetch_json(OVERPASS,data=urllib.parse.urlencode({"data":query}).encode(),headers={"Content-Type":"application/x-www-form-urlencoded","User-Agent":"WoodsRoutePlanner/1.0"},timeout=35);woods=[];trails=[]
+                raw=fetch_overpass(query,timeout=35);woods=[];trails=[]
                 for el in raw.get("elements",[]):
                     f=feature(el)
                     if not f:continue
