@@ -37,7 +37,7 @@ class MainActivity : Activity() {
         )
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
-        webView.settings.geolocationEnabled = true
+        webView.settings.setGeolocationEnabled(true)
         webView.settings.allowFileAccess = false
         webView.settings.allowContentAccess = false
         webView.webViewClient = object : WebViewClient() {
