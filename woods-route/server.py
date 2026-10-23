@@ -27,8 +27,8 @@ HTML=r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="
 <label>Route preference</label><select id="mode"><option value="trails">Prefer trails and tracks; minimise road use</option></select>
 <button id="route">Plan route</button><button id="clear" class="secondary">Clear route and pins</button><div class="legend"><span class="swatch"></span> Mapped woodland</div><div id="status" class="status">Loading woodland data…</div>
 <p class="note">GPS requires permission in your phone browser and a secure HTTPS connection. Your position is shown on this map while live tracking is enabled. The map background uses OpenStreetMap tiles directly; woodland and path data also comes from OpenStreetMap. Routing prefers trails but cannot guarantee woodland-only travel or exclude all roads. Check local access signs; mapped paths do not prove legal right-of-way.</p>
-</aside><div id="map"></div></main><script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script><script>
-const map=L.map('map').setView([51.815,-0.42],12);
+</aside><div id="map"><iframe title="Fallback OpenStreetMap map" src="https://www.openstreetmap.org/export/embed.html?bbox=-0.55%2C51.76%2C-0.29%2C51.87&layer=mapnik&marker=51.815%2C-0.42" style="display:block;width:100%;height:100%;min-height:360px;border:0" loading="eager" referrerpolicy="no-referrer"></iframe></div></main><script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script><script>
+document.getElementById('map').innerHTML='';const map=L.map('map').setView([51.815,-0.42],12);
 const osmTiles=L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{attribution:'&copy; OpenStreetMap contributors &copy; CARTO',subdomains:'abcd',maxZoom:20});
 osmTiles.on('tileerror',()=>status('Map tiles from CARTO could not load. Check your connection; woodland overlay is separate.'));
 osmTiles.addTo(map);
