@@ -3,7 +3,7 @@
 import json, os, urllib.error, urllib.parse, urllib.request, re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT=int(os.environ.get("PORT","10000"))
-OS_MAPS_API_KEY=os.environ.get("OS_MAPS_API_KEY","").strip()
+OS_MAPS_API_KEY=os.environ.get("OS_MAPS_API_KEY","").strip()  # retained for compatibility; basemap now uses OpenStreetMap
 OVERPASS="https://overpass-api.de/api/interpreter"
 VALHALLA="https://valhalla1.openstreetmap.de/route"
 TILE_RE=re.compile(r"^/api/tiles/(Leisure|Outdoor|Road|Light)/(\d{1,2})/(\d{1,7})/(\d{1,7})\.png$")
@@ -13,18 +13,17 @@ HTML=r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="
 </style></head><body><header><h1>🌲 Woods Route Planner</h1><p>Woodland map, trail-priority routes and live phone GPS.</p></header><main><aside>
 <p class="note">Tap the map to set start and destination. Turn on live GPS to show your current position as you move.</p>
 <label for="search">Find a place or woodland</label><input id="search" placeholder="e.g. Ashridge Estate, Hertfordshire"><button id="find" class="secondary">Find place</button>
-<label for="style">Ordnance Survey map style</label><select id="style"><option>Leisure</option><option>Outdoor</option><option>Road</option><option>Light</option></select>
+<p class="note">Map background: OpenStreetMap</p>
 <button id="gps">Show my location (live GPS)</button><button id="stopgps" class="secondary">Stop live GPS</button>
 <label for="radius">Search radius around my location</label><select id="radius"><option value="2">2 km</option><option value="5" selected>5 km</option><option value="10">10 km</option><option value="20">20 km</option><option value="30">30 km</option><option value="50">50 km</option></select><button id="nearwoods">Show woods within radius</button>
 <label>Route preference</label><select id="mode"><option value="trails">Prefer trails and tracks; minimise road use</option></select>
 <button id="route">Plan route</button><button id="clear" class="secondary">Clear route and pins</button><div class="legend"><span class="swatch"></span> Mapped woodland</div><div id="status" class="status">Loading woodland data…</div>
-<p class="note">GPS requires permission in your phone browser and a secure HTTPS connection. Your position is shown on this map while live tracking is enabled. OS map tiles are served through this app using your configured OS Maps API key. Routing prefers trails but cannot guarantee woodland-only travel or exclude all roads. Check local access signs; mapped paths do not prove legal right-of-way.</p>
+<p class="note">GPS requires permission in your phone browser and a secure HTTPS connection. Your position is shown on this map while live tracking is enabled. The map background uses OpenStreetMap tiles directly; woodland and path data also comes from OpenStreetMap. Routing prefers trails but cannot guarantee woodland-only travel or exclude all roads. Check local access signs; mapped paths do not prove legal right-of-way.</p>
 </aside><div id="map"></div></main><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
 const map=L.map('map').setView([51.815,-0.42],12);
-const osTiles=L.tileLayer('/api/tiles/Leisure/{z}/{x}/{y}.png',{attribution:'Mapping &copy; Ordnance Survey; woodland and paths &copy; OpenStreetMap contributors',maxZoom:18});
-const fallbackTiles=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap contributors',maxZoom:19});
-osTiles.on('tileerror',()=>{if(!map.hasLayer(fallbackTiles)){map.removeLayer(osTiles);fallbackTiles.addTo(map);status('OS map tiles unavailable for this key/style. Switched to OpenStreetMap background.')}});osTiles.addTo(map);
-document.getElementById('style').onchange=e=>{if(map.hasLayer(fallbackTiles))map.removeLayer(fallbackTiles);if(!map.hasLayer(osTiles))osTiles.addTo(map);osTiles.setUrl('/api/tiles/'+e.target.value+'/{z}/{x}/{y}.png')};
+const osmTiles=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap contributors',maxZoom:19});
+osmTiles.on('tileerror',()=>status('OpenStreetMap tiles could not load. Check your connection or try refreshing.'));
+osmTiles.addTo(map);
 const woods=L.geoJSON(null,{style:{color:'#416d3c',weight:1.5,fillColor:'#78a967',fillOpacity:.45},onEachFeature:(f,l)=>l.bindTooltip(f.properties?.name||'Woodland')}).addTo(map);
 const trails=L.geoJSON(null,{style:{color:'#8b6b42',weight:2,opacity:.9}}).addTo(map);
 let start=null,end=null,startMarker=null,endMarker=null,routeLine=null,gpsWatch=null,positionMarker=null,accuracyCircle=null,nearbyWoodsLayer=null,nearbyCircle=null,currentGPS=null;
