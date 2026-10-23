@@ -31,10 +31,24 @@ HTML=r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="
 document.getElementById('map').innerHTML='';if(!window.L){document.getElementById('status').textContent='Map library failed to load.';throw new Error('Leaflet failed')}
 const map=L.map('map').setView([51.815,-0.42],12);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap contributors',maxZoom:19}).addTo(map);
-const redWoodlands=L.geoJSON(null,{style:{color:'#b51224',weight:1.8,fillColor:'#e32636',fillOpacity:0.72}}).addTo(map);
-let lastWoodQuery='',woodQueryBusy=false;
-async function loadRedWoodlands(){if(map.getZoom()<9||woodQueryBusy)return;const bb=map.getBounds(),s=bb.getSouth().toFixed(4),w=bb.getWest().toFixed(4),n=bb.getNorth().toFixed(4),e=bb.getEast().toFixed(4),key=[s,w,n,e].join(',');if(key===lastWoodQuery)return;lastWoodQuery=key;woodQueryBusy=true;try{const q='[out:json][timeout:20];(way["natural"="wood"]('+s+','+w+','+n+','+e+');way["landuse"="forest"]('+s+','+w+','+n+','+e+'););out geom;';const r=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:'data='+encodeURIComponent(q)});if(!r.ok)throw Error('Woodland data HTTP '+r.status);const data=await r.json(),features=[];for(const el of(data.elements||[])){if(el.type!=='way'||!el.geometry||el.geometry.length<4)continue;const coords=el.geometry.map(p=>[p.lon,p.lat]);if(coords[0][0]!==coords[coords.length-1][0]||coords[0][1]!==coords[coords.length-1][1])coords.push(coords[0]);features.push({type:'Feature',properties:{name:el.tags?.name||'Woodland'},geometry:{type:'Polygon',coordinates:[coords]}})}redWoodlands.clearLayers();redWoodlands.addData({type:'FeatureCollection',features});status('Red woodland areas loaded: '+features.length+'.')}catch(err){console.error(err);status('Could not load red woodland areas: '+err.message)}finally{woodQueryBusy=false}}
-map.on('moveend',loadRedWoodlands);loadRedWoodlands();
+const redWoodlands=L.geoJSON(null,{style:{color:'#b51224',weight:1.8,fillColor:'#e32636',fillOpacity:0.72},onEachFeature:(f,l)=>l.bindTooltip(f.properties?.name||'Woodland')}).addTo(map);
+let lastWoodQuery='',woodQueryBusy=false,woodRequestId=0;
+async function loadRedWoodlands(){
+ if(map.getZoom()<9||woodQueryBusy)return;
+ const bb=map.getBounds(),s=bb.getSouth().toFixed(4),w=bb.getWest().toFixed(4),n=bb.getNorth().toFixed(4),e=bb.getEast().toFixed(4),key=[s,w,n,e].join(',');
+ if(key===lastWoodQuery)return;
+ woodQueryBusy=true;const requestId=++woodRequestId;
+ try{
+  status('Loading mapped woodland outlines…');
+  const r=await fetch('/api/woodlands?bbox='+encodeURIComponent(key),{cache:'no-store'});
+  const data=await r.json();if(!r.ok)throw Error(data.error||('HTTP '+r.status));
+  if(requestId!==woodRequestId)return;
+  redWoodlands.clearLayers();redWoodlands.addData(data);lastWoodQuery=key;
+  status('Red woodland areas loaded: '+(data.count??data.features?.length??0)+'.');
+ }catch(err){if(requestId===woodRequestId){console.error('Woodland loading failed:',err);status('Woodland highlighting unavailable: '+err.message+'. Pan or zoom to retry.');}}
+ finally{if(requestId===woodRequestId)woodQueryBusy=false}
+}
+map.on('moveend',()=>{lastWoodQuery='';loadRedWoodlands()});loadRedWoodlands();
 const woods=L.geoJSON(null,{style:{color:'#e32636',weight:2.8,fillColor:'#e32636',fillOpacity:.30},onEachFeature:(f,l)=>l.bindTooltip(f.properties?.name||'Woodland')}).addTo(map);
 const trails=L.geoJSON(null,{style:{color:'#8b6b42',weight:2,opacity:.9}}).addTo(map);
 let start=null,end=null,startMarker=null,endMarker=null,routeLine=null,gpsWatch=null,positionMarker=null,accuracyCircle=null,nearbyWoodsLayer=null,nearbyCircle=null,currentGPS=null;
@@ -109,6 +123,24 @@ class Handler(BaseHTTPRequestHandler):
                 if not data:return self.send_json(404,{"error":"No matching place found"})
                 return self.send_json(200,{"lat":float(data[0]["lat"]),"lon":float(data[0]["lon"]),"name":data[0]["display_name"]})
             except Exception:return self.send_json(502,{"error":"Place search temporarily unavailable"})
+        if path=="/api/woodlands":
+            try:
+                vals=q.get("bbox",[""])[0].split(",")
+                if len(vals)!=4: return self.send_json(400,{"error":"bbox must be south,west,north,east"})
+                south,west,north,east=map(float,vals)
+                if not (-90<=south<north<=90 and -180<=west<east<=180): return self.send_json(400,{"error":"Invalid map bounds"})
+                if (north-south)*(east-west)>4.0: return self.send_json(400,{"error":"Zoom in to a smaller area to load woodland outlines"})
+                query=f"""[out:json][timeout:25];(way["natural"="wood"]({south},{west},{north},{east});way["landuse"="forest"]({south},{west},{north},{east}););out geom;"""
+                raw=fetch_overpass(query,timeout=30)
+                features=[]
+                for el in raw.get("elements",[]):
+                    if el.get("type")!="way": continue
+                    ft=feature(el)
+                    if ft and ft.get("geometry",{}).get("type")=="Polygon": features.append(ft)
+                return self.send_json(200,{"type":"FeatureCollection","features":features,"count":len(features)})
+            except Exception as exc:
+                print("Woodland viewport query failed: "+str(exc),flush=True)
+                return self.send_json(502,{"error":"Woodland data providers are temporarily unavailable"})
         if path=="/api/nearby-woods":
             try:
                 lat=float(q.get("lat",[""])[0]);lon=float(q.get("lon",[""])[0]);radius=float(q.get("radius",["5"])[0])
