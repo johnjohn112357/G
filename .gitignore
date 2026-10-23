@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+toolkit.sqlite3*
+.env
+.venv/
