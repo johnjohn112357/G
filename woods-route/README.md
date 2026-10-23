@@ -1,57 +1,65 @@
 # Woods Route Planner
 
-A small Python HTTP app for woodland discovery and pedestrian route planning. The browser map uses OpenStreetMap tiles. Woodland searches fetch data on demand from OpenStreetMap/Overpass and official woodland inventory services when available.
+A lightweight woodland-focused walking route planner. The Python backend uses only the standard library; the frontend uses Leaflet.
 
-## Keep it up to date
+## Live app
 
-- Source code is versioned in GitHub on the `woods-route-planner` branch. Changes pushed to this branch are saved in the repository and trigger the configured Render auto-deploy.
-- Woodland records are queried live when you search; the app does not rely on a stale bundled woodland snapshot.
-- GitHub Actions builds and publishes the Docker image on relevant pushes, every Monday, or when manually triggered.
-- Public data services may be unavailable or incomplete, and weekly Docker rebuilds do not guarantee upstream datasets themselves have changed.
+https://woods-route-planner.onrender.com
 
-## Run locally with Python
+## Run with Python
 
-Requires Python 3.10+; the server uses only the Python standard library.
+Requires Python 3.10+ and an internet connection.
 
 ```sh
 cd woods-route
-PORT=10000 python server.py
+python server.py
 ```
 
-Open http://localhost:10000.
+Open http://127.0.0.1:10000. On desktop the app opens a browser automatically. Set `PORT` to change the port, or `WOODS_NO_BROWSER=1` to suppress browser launch.
 
-## Build and run with Docker
+## Docker
 
 From the repository root:
 
 ```sh
-docker build -t woods-route-planner:local -f woods-route/Dockerfile woods-route
-docker run --rm -p 10000:10000 -e PORT=10000 woods-route-planner:local
+docker compose -f woods-route/docker-compose.yml up --build -d
 ```
 
-Open http://localhost:10000. The container exposes `/health` for health checks.
-
-GitHub Actions publishes these image tags to GitHub Container Registry (GHCR) after the workflow succeeds:
-
-- `ghcr.io/johnjohn112357/woods-route-planner:latest`
-- `ghcr.io/johnjohn112357/woods-route-planner:sha-<commit>`
-
-Pull and run:
+Open http://localhost:10000. Stop with:
 
 ```sh
-docker pull ghcr.io/johnjohn112357/woods-route-planner:latest
-docker run --rm -p 10000:10000 -e PORT=10000 ghcr.io/johnjohn112357/woods-route-planner:latest
+docker compose -f woods-route/docker-compose.yml down
 ```
 
-The package is available only after the first successful workflow run. If GHCR access is private, authenticate to GitHub Container Registry first.
+Or build and run directly:
 
-## Render
+```sh
+docker build -t woods-route-planner:local -f woods-route/Dockerfile woods-route
+docker run --rm -p 10000:10000 -e PORT=10000 -e WOODS_NO_BROWSER=1 woods-route-planner:local
+```
 
-Render can continue deploying directly from the GitHub branch. Publishing a Docker image is an additional portable deployment route; it does not automatically change the existing Render service to use that image.
+The container exposes a `/health` endpoint for health checks.
 
-## Attribution and limitations
+## Windows installer
 
-- Map tiles: © OpenStreetMap contributors, https://www.openstreetmap.org/copyright
-- Woodland inventory data remains subject to the terms and attribution requirements of its upstream provider.
-- Live data is not guaranteed complete or real-time. Public Overpass and routing endpoints can be rate-limited.
-- A mapped path or woodland polygon does not establish public access rights.
+The GitHub Actions workflow **Woods Route Planner Windows build** builds a standalone Windows executable, a portable ZIP, and an Inno Setup installer. The executable bundles Python, so users do not need to install Python separately.
+
+To get the build, open the repository's **Actions** tab, choose the latest successful **Woods Route Planner Windows build**, and download the `WoodsRoutePlanner-Windows` artifact. The workflow can also be started manually with **Run workflow**.
+
+The installer creates Start Menu and desktop shortcuts. The app needs internet access for map tiles, geocoding, woodland data and routing.
+
+## Data sources and limitations
+
+- Basemap: Esri World Topographic Map.
+- Woodland and footpath overlays: OpenStreetMap/Overpass, plus the England Ancient Woodland Inventory where available.
+- Routing: Valhalla pedestrian routing with a BRouter trekking fallback.
+- Public data services may rate-limit or be temporarily unavailable; the app reports source errors when possible.
+- A mapped path is not proof of a public right of way. Check access restrictions, signs, crossings and local conditions.
+
+## Project files
+
+- `server.py` — HTTP server, API endpoints and embedded browser interface.
+- `Dockerfile` — container image.
+- `docker-compose.yml` — Compose configuration (at repository root).
+- `windows/` — Windows launcher and installer definition.
+- `.github/workflows/woods-route-windows.yml` — Windows build workflow.
