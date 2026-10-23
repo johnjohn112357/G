@@ -2,7 +2,7 @@
 """Woods Route Planner — woodland-focused map and pedestrian route planner."""
 import json, os, urllib.error, urllib.parse, urllib.request, re, socket
 
-// Force outbound HTTP lookups to IPv4: Render logs show Errno 101 Network is unreachable on data-source calls.
+# Force outbound HTTP lookups to IPv4: Render logs show Errno 101 Network is unreachable on data-source calls.
 _original_getaddrinfo = socket.getaddrinfo
 def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
     if family in (0, socket.AF_UNSPEC):
