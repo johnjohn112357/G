@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Small standalone OS Raster tile proxy and static web server."""
+import json
 import os
 import re
 import urllib.error
@@ -15,7 +16,7 @@ TILE_RE = re.compile(r"^/api/tiles/(Leisure|Outdoor|Road|Light)/(\d{1,2})/(\d{1,
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "FootpathMap/1.1"
+    server_version = "FootpathMap/1.2"
 
     def _send_page_headers(self, body_length):
         self.send_response(200)
@@ -23,6 +24,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Content-Length", str(body_length))
         self.end_headers()
+
+    def _send_health(self, head_only=False):
+        body = json.dumps({
+            "status": "ok",
+            "os_maps_api_key_configured": bool(OS_MAPS_API_KEY),
+        }).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(body)
 
     def do_HEAD(self):
         """Support platform health probes without downloading page or map tiles."""
@@ -36,10 +50,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_page_headers(body_length)
             return
         if path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", "2")
-            self.end_headers()
+            self._send_health(head_only=True)
             return
         self.send_error(404, "Not found")
 
@@ -56,12 +67,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/health":
-            body = b"ok"
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_health()
             return
 
         match = TILE_RE.match(path)
@@ -81,7 +87,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             request = urllib.request.Request(
                 url,
-                headers={"User-Agent": "FootpathMap/1.1 (OS Maps tile proxy)"},
+                headers={"User-Agent": "FootpathMap/1.2 (OS Maps tile proxy)"},
             )
             try:
                 with urllib.request.urlopen(request, timeout=12) as upstream:
@@ -94,7 +100,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(data)
             except urllib.error.HTTPError as exc:
-                status = 502 if exc.code not in (429,) else 503
+                status = 503 if exc.code == 429 else 502
                 self.send_error(status, "OS Maps tile request was rejected")
             except (urllib.error.URLError, TimeoutError, OSError):
                 self.send_error(502, "OS Maps tile service is temporarily unavailable")
@@ -103,6 +109,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404, "Not found")
 
     def log_message(self, fmt, *args):
+        # The handler's normal access log includes only the path, not query strings.
         super().log_message(fmt, *args)
 
 
