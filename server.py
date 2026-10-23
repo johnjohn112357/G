@@ -258,7 +258,7 @@ class Handler(BaseHTTPRequestHandler):
         p=urlparse(self.path).path
         if p == "/":
             self.send_response(302)
-            self.send_header("Location", "/maps")
+            self.send_header("Location", "/tools")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return
