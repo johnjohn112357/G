@@ -92,7 +92,7 @@ class Handler(BaseHTTPRequestHandler):
                 lat=float(q.get("lat",[""])[0]);lon=float(q.get("lon",[""])[0]);radius=float(q.get("radius",["5"])[0])
                 if not (-90<=lat<=90 and -180<=lon<=180) or not (1<=radius<=50):return self.send_json(400,{"error":"Invalid location or radius (1–50 km)."})
                 # Convert radius to a conservative bounding box, then filter candidates by haversine distance.
-                dlat=radius/111.0;dlon=radius/(111.0*max(0.15,abs(__import__("math").cos(__import__("math").radians(lat))))
+                dlat=radius/111.0;dlon=radius/(111.0*max(0.15,abs(__import__("math").cos(__import__("math").radians(lat)))))
                 s,w,n,e=lat-dlat,lon-dlon,lat+dlat,lon+dlon
                 query=f"""[out:json][timeout:40];(way[landuse=forest]({s},{w},{n},{e});way[natural=wood]({s},{w},{n},{e});relation[landuse=forest]({s},{w},{n},{e});relation[natural=wood]({s},{w},{n},{e}););out center geom;"""
                 raw=fetch_json(OVERPASS,data=query.encode(),headers={"Content-Type":"application/x-www-form-urlencoded","User-Agent":"WoodsRoutePlanner/1.0"},timeout=50)
