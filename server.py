@@ -112,7 +112,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control","no-store"); self.send_header("Referrer-Policy","no-referrer")
         self.end_headers(); self.wfile.write(raw)
     def auth(self):
-        if urlparse(self.path).path == "/health": return True
+        if urlparse(self.path).path in ("/health", "/maps", "/"): return True
         if not API_KEY:
             self.reply(503,{"error":"API_KEY is not configured"}); return False
         h=self.headers.get("Authorization","")
@@ -178,9 +178,26 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(502, {"error":"OS Maps upstream request failed; check OS Data Hub key, plan and service availability"})
         return True
 
+    def do_HEAD(self):
+        p = urlparse(self.path).path
+        if p in ("/", "/health", "/maps"):
+            self.send_response(302 if p == "/" else 200)
+            if p == "/": self.send_header("Location", "/maps")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        self.send_response(404)
+        self.end_headers()
+
     def do_GET(self):
         if not self.auth(): return
         p=urlparse(self.path).path
+        if p == "/":
+            self.send_response(302)
+            self.send_header("Location", "/maps")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         if p == "/maps":
             raw = MAPS_HTML.encode("utf-8")
             self.send_response(200)
