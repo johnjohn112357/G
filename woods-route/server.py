@@ -30,7 +30,7 @@ HTML=r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="
 </aside><div id="map"><iframe title="Fallback OpenStreetMap map" src="https://www.openstreetmap.org/export/embed.html?bbox=-0.55%2C51.76%2C-0.29%2C51.87&layer=mapnik&marker=51.815%2C-0.42" style="display:block;width:100%;height:100%;min-height:360px;border:0" loading="eager" referrerpolicy="no-referrer"></iframe></div></main><script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script><script>
 document.getElementById('map').innerHTML='';const map=L.map('map').setView([51.815,-0.42],12);
 const osmTiles=L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{attribution:'&copy; OpenStreetMap contributors &copy; CARTO',subdomains:'abcd',maxZoom:20});
-osmTiles.on('tileerror',()=>status('Map tiles from CARTO could not load. Check your connection; woodland overlay is separate.'));
+osmTiles.on('tileerror',()=>{status('Map tiles failed; switching to embedded OpenStreetMap.');const frame=document.createElement('iframe');frame.title='Fallback OpenStreetMap map';frame.src='https://www.openstreetmap.org/export/embed.html?bbox=-0.55%2C51.76%2C-0.29%2C51.87&layer=mapnik&marker=51.815%2C-0.42';frame.style.cssText='display:block;width:100%;height:100%;min-height:360px;border:0';frame.loading='eager';document.getElementById('map').replaceChildren(frame);});
 osmTiles.addTo(map);
 const woods=L.geoJSON(null,{style:{color:'#416d3c',weight:1.5,fillColor:'#78a967',fillOpacity:.45},onEachFeature:(f,l)=>l.bindTooltip(f.properties?.name||'Woodland')}).addTo(map);
 const trails=L.geoJSON(null,{style:{color:'#8b6b42',weight:2,opacity:.9}}).addTo(map);
