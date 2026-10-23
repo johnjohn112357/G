@@ -54,6 +54,65 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_error(404, "Not found")
 
+    def do_POST(self):
+        if urlparse(self.path).path != "/api/route":
+            self.send_error(404, "Not found")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length < 1 or length > 16384:
+                self.send_error(413, "Invalid request size")
+                return
+            payload = json.loads(self.rfile.read(length))
+        except (ValueError, json.JSONDecodeError):
+            self.send_error(400, "Invalid JSON")
+            return
+        locations = payload.get("locations") if isinstance(payload, dict) else None
+        if not isinstance(locations, list) or len(locations) != 2:
+            self.send_error(400, "Exactly two route locations are required")
+            return
+        checked = []
+        for point in locations:
+            if not isinstance(point, dict):
+                self.send_error(400, "Invalid route location")
+                return
+            lat, lon = point.get("lat"), point.get("lon")
+            if isinstance(lat, bool) or isinstance(lon, bool) or not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)) or not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+                self.send_error(400, "Invalid route coordinates")
+                return
+            checked.append({"lat": float(lat), "lon": float(lon)})
+        request_body = json.dumps({"locations": checked, "costing": "pedestrian", "units": "kilometers", "shape_format": "geojson"}).encode("utf-8")
+        upstream_request = urllib.request.Request("https://valhalla.openstreetmap.de/route", data=request_body, headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "FootpathMap/1.3"}, method="POST")
+        try:
+            with urllib.request.urlopen(upstream_request, timeout=25) as upstream:
+                result = json.loads(upstream.read(4000000).decode("utf-8"))
+            trip = result.get("trip", {})
+            legs = trip.get("legs", [])
+            if not legs:
+                raise ValueError("No route legs returned")
+            geometry = legs[0].get("shape", {})
+            coords = geometry.get("coordinates", []) if isinstance(geometry, dict) else []
+            if not isinstance(geometry, dict) or geometry.get("type") != "LineString" or len(coords) < 2:
+                raise ValueError("Route geometry unavailable")
+            route_coords = []
+            for coord in coords:
+                if not isinstance(coord, list) or len(coord) < 2 or not isinstance(coord[0], (int, float)) or not isinstance(coord[1], (int, float)) or not (-180 <= coord[0] <= 180) or not (-90 <= coord[1] <= 90):
+                    raise ValueError("Invalid route geometry")
+                route_coords.append([coord[1], coord[0]])
+            length_km = trip.get("summary", {}).get("length")
+            if not isinstance(length_km, (int, float)) or length_km < 0:
+                length_km = legs[0].get("summary", {}).get("length", 0)
+            body = json.dumps({"status": "ok", "coordinates": route_coords, "distance_m": round(float(length_km) * 1000, 1)}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except urllib.error.HTTPError as exc:
+            self.send_error(429 if exc.code == 429 else 502, "Routing service rejected the request; try again later")
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+            self.send_error(502, "No pedestrian route returned; try different endpoints")
     def do_GET(self):
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
