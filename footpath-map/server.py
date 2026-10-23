@@ -15,6 +15,32 @@ OS_MAPS_API_KEY = os.environ.get("OS_MAPS_API_KEY", "").strip()
 TILE_RE = re.compile(r"^/api/tiles/(Leisure|Outdoor|Road|Light)/(\d{1,2})/(\d{1,7})/(\d{1,7})\.png$")
 
 
+def decode_polyline6(encoded):
+    """Decode Valhalla's default six-decimal encoded route shape."""
+    index = 0
+    lat = lon = 0
+    points = []
+    while index < len(encoded):
+        values = []
+        for _ in range(2):
+            result = shift = 0
+            while True:
+                if index >= len(encoded):
+                    raise ValueError("Truncated route shape")
+                byte = ord(encoded[index]) - 63
+                index += 1
+                result |= (byte & 0x1f) << shift
+                shift += 5
+                if byte < 0x20:
+                    break
+                if shift > 35:
+                    raise ValueError("Invalid route shape")
+            values.append(~(result >> 1) if result & 1 else result >> 1)
+        lat += values[0]
+        lon += values[1]
+        points.append([lat / 1000000.0, lon / 1000000.0])
+    return points
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "FootpathMap/1.2"
 
@@ -81,7 +107,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(400, "Invalid route coordinates")
                 return
             checked.append({"lat": float(lat), "lon": float(lon)})
-        request_body = json.dumps({"locations": checked, "costing": "pedestrian", "units": "kilometers", "shape_format": "geojson"}).encode("utf-8")
+        request_body = json.dumps({"locations": checked, "costing": "pedestrian", "units": "kilometers"}).encode("utf-8")
         upstream_request = urllib.request.Request("https://valhalla.openstreetmap.de/route", data=request_body, headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "FootpathMap/1.3"}, method="POST")
         try:
             with urllib.request.urlopen(upstream_request, timeout=25) as upstream:
@@ -90,15 +116,12 @@ class Handler(BaseHTTPRequestHandler):
             legs = trip.get("legs", [])
             if not legs:
                 raise ValueError("No route legs returned")
-            geometry = legs[0].get("shape", {})
-            coords = geometry.get("coordinates", []) if isinstance(geometry, dict) else []
-            if not isinstance(geometry, dict) or geometry.get("type") != "LineString" or len(coords) < 2:
+            shape = legs[0].get("shape", "")
+            if not isinstance(shape, str) or not shape:
                 raise ValueError("Route geometry unavailable")
-            route_coords = []
-            for coord in coords:
-                if not isinstance(coord, list) or len(coord) < 2 or not isinstance(coord[0], (int, float)) or not isinstance(coord[1], (int, float)) or not (-180 <= coord[0] <= 180) or not (-90 <= coord[1] <= 90):
-                    raise ValueError("Invalid route geometry")
-                route_coords.append([coord[1], coord[0]])
+            route_coords = decode_polyline6(shape)
+            if len(route_coords) < 2 or any(not (-90 <= p[0] <= 90 and -180 <= p[1] <= 180) for p in route_coords):
+                raise ValueError("Invalid route geometry")
             length_km = trip.get("summary", {}).get("length")
             if not isinstance(length_km, (int, float)) or length_km < 0:
                 length_km = legs[0].get("summary", {}).get("length", 0)
