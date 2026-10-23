@@ -93,6 +93,35 @@ class CalculationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_os_tile_path("/api/maps/os/Leisure/3/8/0.png")
 
+    def test_resistor_divider(self):
+        result = calculate("/api/calculate/resistor-divider", {"input_voltage_v":12,"r1_ohm":1000,"r2_ohm":1000})
+        self.assertAlmostEqual(result["output_voltage_v"], 6)
+        self.assertAlmostEqual(result["divider_current_a"], 0.006)
+
+    def test_led_resistor(self):
+        result = calculate("/api/calculate/led-resistor", {"supply_voltage_v":12,"led_forward_voltage_v":2,"led_current_ma":20})
+        self.assertAlmostEqual(result["minimum_ideal_resistance_ohm"], 500)
+        self.assertAlmostEqual(result["resistor_power_w"], 0.2)
+
+    def test_solar_energy(self):
+        result = calculate("/api/calculate/solar-energy", {"panel_power_w":400,"peak_sun_hours":4,"system_efficiency":0.75})
+        self.assertAlmostEqual(result["estimated_daily_energy_wh"], 1200)
+
+    def test_thermal_expansion(self):
+        result = calculate("/api/calculate/thermal-expansion", {"length_m":2,"alpha_per_c":0.000012,"delta_temp_c":50})
+        self.assertAlmostEqual(result["length_change_m"], 0.0012)
+
+    def test_pressure_and_density(self):
+        self.assertAlmostEqual(calculate("/api/calculate/pressure", {"force_n":100,"area_m2":0.01})["pressure_pa"], 10000)
+        self.assertAlmostEqual(calculate("/api/calculate/density", {"mass_kg":2,"volume_m3":0.001})["density_kg_m3"], 2000)
+
+    def test_unit_conversion(self):
+        result = calculate("/api/convert/unit", {"category":"speed","value":60,"from_unit":"mph","to_unit":"km/h"})
+        self.assertAlmostEqual(result["value"], 96.56064)
+
+    def test_temperature_conversion(self):
+        result = calculate("/api/convert/unit", {"category":"temperature","value":100,"from_unit":"C","to_unit":"F"})
+        self.assertAlmostEqual(result["value"], 212)
     def test_rejects_nan(self):
         with self.assertRaises(ValueError):
             calculate("/api/calculate/battery-energy", {
