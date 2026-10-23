@@ -37,6 +37,25 @@ def number(d, k, minimum=None):
         raise ValueError(k + " is outside the allowed range")
     return v
 
+def parse_os_tile_path(path):
+    parts = path.strip("/").split("/")
+    if len(parts) != 7 or parts[:3] != ["api", "maps", "os"]:
+        raise ValueError("Invalid OS tile path")
+    style = parts[3]
+    if style not in OS_STYLES:
+        raise ValueError("Unsupported OS map style")
+    try:
+        z, x = int(parts[4]), int(parts[5])
+        ypart = parts[6]
+        if not ypart.endswith(".png"): raise ValueError()
+        y = int(ypart[:-4])
+    except (ValueError, IndexError):
+        raise ValueError("Invalid tile coordinates")
+    if z < 0 or z > 18 or x < 0 or y < 0 or x >= 2**z or y >= 2**z:
+        raise ValueError("Tile coordinates outside allowed range")
+    return style, z, x, y
+
+
 def calculate(path, d):
     if path == "/api/calculate/battery-energy":
         v, ah = number(d,"voltage_v",0), number(d,"capacity_ah",0)
@@ -101,11 +120,14 @@ class Handler(BaseHTTPRequestHandler):
         if not token or not hmac.compare_digest(token,API_KEY):
             self.reply(401,{"error":"Unauthorized"}); return False
         now=time.time(); ip=self.client_address[0]
+        route = urlparse(self.path).path
+        bucket = ip + (":tiles" if route.startswith("/api/maps/os/") else ":api")
+        limit = max(RATE_LIMIT, 600) if route.startswith("/api/maps/os/") else RATE_LIMIT
         with hits_lock:
-            recent=[t for t in hits.get(ip,[]) if now-t<60]
-            if len(recent)>=RATE_LIMIT:
+            recent=[t for t in hits.get(bucket,[]) if now-t<60]
+            if len(recent)>=limit:
                 self.reply(429,{"error":"Rate limit exceeded"}); return False
-            recent.append(now); hits[ip]=recent
+            recent.append(now); hits[bucket]=recent
         return True
     def body(self):
         try: n=int(self.headers.get("Content-Length","0"))
@@ -115,10 +137,11 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(d,dict): raise ValueError("JSON body must be an object")
         return d
     def os_tile(self, path):
-        parts = path.strip("/").split("/")
-        # /api/maps/os/{style}/{z}/{x}/{y}.png
-        if len(parts) != 7 or parts[:3] != ["api", "maps", "os"]:
-            return False
+        try:
+            style, z, x, y = parse_os_tile_path(path)
+        except ValueError as e:
+            self.reply(400, {"error":str(e)})
+            return True
         if not OS_MAPS_API_KEY:
             self.reply(503, {"error":"OS_MAPS_API_KEY is not configured on the server"})
             return True
