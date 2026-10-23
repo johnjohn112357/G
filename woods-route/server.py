@@ -32,7 +32,7 @@ document.getElementById('map').innerHTML='';if(!window.L){document.getElementByI
 const osmTiles=L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{attribution:'&copy; OpenStreetMap contributors &copy; CARTO',subdomains:'abcd',maxZoom:20});
 let fallbackShown=false;osmTiles.on('tileerror',()=>{if(fallbackShown)return;fallbackShown=true;status('Map tiles failed; switching to embedded OpenStreetMap.');const frame=document.createElement('iframe');frame.title='Fallback OpenStreetMap map';frame.src='https://www.openstreetmap.org/export/embed.html?bbox=-0.55%2C51.76%2C-0.29%2C51.87&layer=mapnik&marker=51.815%2C-0.42';frame.style.cssText='display:block;width:100%;height:100%;min-height:360px;border:0';frame.loading='eager';document.getElementById('map').replaceChildren(frame);});
 osmTiles.addTo(map);
-const woods=L.geoJSON(null,{style:{color:'#e32636',weight:2.5,fillColor:'#e32636',fillOpacity:.12},onEachFeature:(f,l)=>l.bindTooltip(f.properties?.name||'Woodland')}).addTo(map);
+const woods=L.geoJSON(null,{style:{color:'#e32636',weight:2.8,fillColor:'#e32636',fillOpacity:.30},onEachFeature:(f,l)=>l.bindTooltip(f.properties?.name||'Woodland')}).addTo(map);
 const trails=L.geoJSON(null,{style:{color:'#8b6b42',weight:2,opacity:.9}}).addTo(map);
 let start=null,end=null,startMarker=null,endMarker=null,routeLine=null,gpsWatch=null,positionMarker=null,accuracyCircle=null,nearbyWoodsLayer=null,nearbyCircle=null,currentGPS=null;
 const status=t=>document.getElementById('status').textContent=t;
