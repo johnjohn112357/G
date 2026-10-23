@@ -7,7 +7,7 @@ A mobile-friendly Ordnance Survey raster map with automatic pedestrian routing, 
 - OS Leisure, Outdoor, Road and Light raster layer selector
 - Mobile pan/zoom and device geolocation
 - Automatic pedestrian routing between two map-selected points via Valhalla/OpenStreetMap
-- Manual route tracing with drawn-line distance calculation
+- Automatic pedestrian routing between two map-selected points via Valhalla/OpenStreetMap\n- On-demand OpenStreetMap mapped-path overlay for the current view (not a legal PRoW layer)\n- Manual route tracing with drawn-line distance calculation
 - GPX route/track import and GPX export
 - `/health` endpoint reports service health and whether an OS Maps API key is configured (never returns the key)
 
