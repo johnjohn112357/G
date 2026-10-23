@@ -49,9 +49,14 @@
         minZoom: 5, maxZoom: 18, tileSize: 256,
         attribution: 'Contains OS data © Crown copyright and database rights'
       }).addTo(map);
+      tileLayer.on('tileerror', () => {
+        document.getElementById('routeStatus').textContent = 'Map tiles failed to load. Check /health for API-key configuration and verify the OS Maps API subscription.';
+      });
+      tileLayer.on('load', () => {
+        document.getElementById('routeStatus').textContent = points.length ? points.length + ' route points · drawn-line distance' : 'Map loaded. Tap “Add route points” to trace a route.';
+      });
     }
     styleSelect.addEventListener('change', () => setMapStyle(styleSelect.value));
-    setMapStyle(styleSelect.value);
 
     const points = [];
     let routeLine = null, routeMarkers = [], drawing = false, gpsMarker = null, accuracyCircle = null;
@@ -107,10 +112,14 @@
       try {
         const xml = new DOMParser().parseFromString(await file.text(), 'application/xml');
         if (xml.querySelector('parsererror')) throw new Error('The file is not valid GPX/XML.');
-        const imported = Array.from(xml.getElementsByTagNameNS('*','trkpt')).map(el => [Number(el.getAttribute('lat')), Number(el.getAttribute('lon'))])
-          .concat(Array.from(xml.getElementsByTagNameNS('*','rtept')).map(el => [Number(el.getAttribute('lat')), Number(el.getAttribute('lon'))]));
+        const routePoints = Array.from(xml.getElementsByTagNameNS('*','rtept'));
+        const trackSegments = Array.from(xml.getElementsByTagNameNS('*','trkseg'));
+        const sourcePoints = routePoints.length ? routePoints : trackSegments.length
+          ? Array.from(trackSegments[0].getElementsByTagNameNS('*','trkpt'))
+          : Array.from(xml.getElementsByTagNameNS('*','trkpt'));
+        const imported = sourcePoints.map(el => [Number(el.getAttribute('lat')), Number(el.getAttribute('lon'))]);
         const valid = imported.filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]) && Math.abs(p[0])<=90 && Math.abs(p[1])<=180);
-        if (valid.length < 2) throw new Error('No usable track or route with at least two points was found.');
+        if (valid.length < 2) throw new Error('No usable route or track with at least two points was found.');
         points.splice(0, points.length, ...valid);
         drawing=false; drawButton.classList.remove('primary'); drawButton.textContent='＋ Add route points'; map.getContainer().style.cursor='';
         renderRoute('Imported '+file.name+' · '+valid.length+' points.');
@@ -126,6 +135,7 @@
       const url = URL.createObjectURL(blob), a = document.createElement('a');
       a.href=url; a.download='footpath-route.gpx'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
+    setMapStyle(styleSelect.value);
     renderRoute();
   </script>
 </body>
