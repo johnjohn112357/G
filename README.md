@@ -27,6 +27,13 @@ A lightweight Python HTTP API for engineering calculations and a persistent evid
 - `POST /api/calculate/torque-from-power`: `{"power_w":1000,"rpm":1000}`
 - `POST /api/calculate/gear-ratio`: `{"input_rpm":3000,"output_rpm":1000}`
 - `POST /api/calculate/wheel-circumference`: `{"wheel_diameter_mm":200}`
+- `POST /api/calculate/resistor-divider`: `{"input_voltage_v":12,"r1_ohm":1000,"r2_ohm":1000}`
+- `POST /api/calculate/led-resistor`: `{"supply_voltage_v":12,"led_forward_voltage_v":2,"led_current_ma":20}`
+- `POST /api/calculate/solar-energy`: `{"panel_power_w":400,"peak_sun_hours":4,"system_efficiency":0.75}`
+- `POST /api/calculate/thermal-expansion`: `{"length_m":2,"alpha_per_c":0.000012,"delta_temp_c":50}`
+- `POST /api/calculate/pressure`: `{"force_n":100,"area_m2":0.01}`
+- `POST /api/calculate/density`: `{"mass_kg":2,"volume_m3":0.001}`
+- `POST /api/convert/unit`: `{"category":"speed","value":60,"from_unit":"mph","to_unit":"km/h"}` (also length, mass, pressure, energy, power, volume and temperature)
 
 
 ## Ordnance Survey (OS) Maps integration
