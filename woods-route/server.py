@@ -46,7 +46,7 @@ async function loadRedWoodlands(){
   redWoodlands.clearLayers();redWoodlands.addData(data);lastWoodQuery=key;
   status('Red woodland areas loaded: '+(data.count??data.features?.length??0)+'.');
  }catch(err){if(requestId===woodRequestId){console.error('Woodland loading failed:',err);status('Woodland highlighting unavailable: '+err.message+'. Pan or zoom to retry.');}}
- finally{if(requestId===woodRequestId)woodQueryBusy=false}
+ finally{if(requestId===woodRequestId){woodQueryBusy=false;const now=map.getBounds(),nowKey=[now.getSouth().toFixed(4),now.getWest().toFixed(4),now.getNorth().toFixed(4),now.getEast().toFixed(4)].join(',');if(nowKey!==key){lastWoodQuery='';loadRedWoodlands()}}}
 }
 map.on('moveend',()=>{lastWoodQuery='';loadRedWoodlands()});loadRedWoodlands();
 const woods=L.geoJSON(null,{style:{color:'#e32636',weight:2.8,fillColor:'#e32636',fillOpacity:.30},onEachFeature:(f,l)=>l.bindTooltip(f.properties?.name||'Woodland')}).addTo(map);
