@@ -4,17 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#173c35">
-  <title>Footpath Map — OS Leisure</title>
+  <title>Footpath Map — OS Maps</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
   <style>
-    :root{color-scheme:light;--ink:#17342e;--muted:#63736d;--accent:#176b50;--paper:#fff;--line:#dce5df}
+    :root{color-scheme:light;--ink:#17342e;--muted:#63736d;--accent:#176b50;--line:#dce5df}
     *{box-sizing:border-box}html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink)}
     body{display:flex;flex-direction:column;background:#f4f7f4}.top{padding:12px 16px;background:#173c35;color:white;display:flex;align-items:center;justify-content:space-between;gap:12px}
-    .brand{font-size:18px;font-weight:750;letter-spacing:.2px}.sub{font-size:12px;color:#d3e5dc;margin-top:2px}
-    .pill{font-size:12px;border:1px solid #73968a;border-radius:20px;padding:6px 9px;white-space:nowrap}
-    .tools{display:flex;flex-wrap:wrap;gap:8px;padding:10px 12px;background:white;border-bottom:1px solid var(--line)}
-    button{border:1px solid #cbd8d0;border-radius:10px;background:white;color:var(--ink);padding:10px 12px;font-weight:650;font-size:13px;cursor:pointer}
-    button.primary{background:var(--accent);border-color:var(--accent);color:white}button:active{transform:translateY(1px)}
+    .brand{font-size:18px;font-weight:750;letter-spacing:.2px}.sub{font-size:12px;color:#d3e5dc;margin-top:2px}.pill{font-size:12px;border:1px solid #73968a;border-radius:20px;padding:6px 9px;white-space:nowrap}
+    .tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 12px;background:white;border-bottom:1px solid var(--line)}
+    button,select,.file-button{border:1px solid #cbd8d0;border-radius:10px;background:white;color:var(--ink);padding:10px 12px;font-weight:650;font-size:13px;cursor:pointer}
+    button.primary{background:var(--accent);border-color:var(--accent);color:white}button:active{transform:translateY(1px)}select{max-width:100%}.file-input{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;clip-path:inset(50%)}
     .status{padding:7px 13px;font-size:12px;color:var(--muted);background:#f7faf7;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:12px}
     #map{flex:1;min-height:240px;background:#e7ece7}.bottom{padding:9px 12px calc(9px + env(safe-area-inset-bottom));font-size:11px;line-height:1.45;color:#5e6c65;background:white;border-top:1px solid var(--line)}
     .leaflet-control-attribution{font-size:10px!important}.leaflet-container{font:12px system-ui,sans-serif}
@@ -22,40 +21,51 @@
   </style>
 </head>
 <body>
-  <header class="top"><div><div class="brand">Footpath Map</div><div class="sub">OS Leisure mapping · plan and record a path</div></div><div class="pill" id="gpsState">GPS not active</div></header>
+  <header class="top"><div><div class="brand">Footpath Map</div><div class="sub">OS mapping · trace, analyse and export a route</div></div><div class="pill" id="gpsState">GPS not active</div></header>
   <nav class="tools" aria-label="Map tools">
+    <label for="mapStyle">Map</label>
+    <select id="mapStyle" aria-label="Map style">
+      <option value="Leisure">Leisure</option><option value="Outdoor">Outdoor</option><option value="Road">Road</option><option value="Light">Light</option>
+    </select>
     <button class="primary" id="locate">◎ My location</button>
     <button id="draw">＋ Add route points</button>
     <button id="undo">Undo point</button>
     <button id="clear">Clear route</button>
+    <label class="file-button" for="gpxFile">Import GPX</label>
+    <input class="file-input" id="gpxFile" type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml">
     <button id="gpx">Export GPX</button>
   </nav>
-  <div class="status"><span id="routeStatus">Tap “Add route points”, then tap the map to trace a route.</span><strong id="distance">0 m</strong></div>
-  <main id="map" aria-label="OS Leisure map"></main>
-  <footer class="bottom">Map data © Ordnance Survey. Use mapped paths as a guide; this map does not verify public rights of way, access permissions, closures, or ground conditions. Follow signs and local restrictions. GPS requires location permission and HTTPS.</footer>
+  <div class="status"><span id="routeStatus" role="status">Tap “Add route points”, then tap the map to trace a route.</span><strong id="distance">0 m</strong></div>
+  <main id="map" aria-label="Ordnance Survey map"></main>
+  <footer class="bottom">Map data © Ordnance Survey. Contains OS data © Crown copyright and database rights. Route distance follows your drawn/imported line, not a verified path network. This service does not confirm public rights of way, access permissions, closures or ground conditions. Follow signs and local restrictions.</footer>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script>
     const map = L.map('map', {zoomControl:true, preferCanvas:true}).setView([51.8787,-0.4200], 13);
-    L.tileLayer('/api/tiles/Leisure/{z}/{x}/{y}.png', {
-      minZoom: 5, maxZoom: 18, tileSize: 256,
-      attribution: 'Contains OS data © Crown copyright and database rights'
-    }).addTo(map);
+    const styleSelect = document.getElementById('mapStyle');
+    let tileLayer = null;
+    function setMapStyle(style) {
+      if (tileLayer) map.removeLayer(tileLayer);
+      tileLayer = L.tileLayer('/api/tiles/' + style + '/{z}/{x}/{y}.png', {
+        minZoom: 5, maxZoom: 18, tileSize: 256,
+        attribution: 'Contains OS data © Crown copyright and database rights'
+      }).addTo(map);
+    }
+    styleSelect.addEventListener('change', () => setMapStyle(styleSelect.value));
+    setMapStyle(styleSelect.value);
+
     const points = [];
     let routeLine = null, routeMarkers = [], drawing = false, gpsMarker = null, accuracyCircle = null;
     const status = document.getElementById('routeStatus');
     const distance = document.getElementById('distance');
     const gpsState = document.getElementById('gpsState');
     const drawButton = document.getElementById('draw');
-
     function routeDistance(coords) {
       let total = 0;
       for (let i=1; i<coords.length; i++) total += map.distance(coords[i-1], coords[i]);
       return total;
     }
-    function formatDistance(m) {
-      return m >= 1000 ? (m/1000).toFixed(2) + ' km' : Math.round(m) + ' m';
-    }
-    function renderRoute() {
+    function formatDistance(m) { return m >= 1000 ? (m/1000).toFixed(2) + ' km' : Math.round(m) + ' m'; }
+    function renderRoute(message) {
       if (routeLine) map.removeLayer(routeLine);
       routeMarkers.forEach(m => map.removeLayer(m));
       routeMarkers = [];
@@ -64,22 +74,20 @@
         points.forEach((p,i) => routeMarkers.push(L.circleMarker(p,{radius:i===0?7:5,color:'#fff',weight:2,fillColor:'#e65c28',fillOpacity:1}).addTo(map).bindTooltip('Point '+(i+1))));
       } else routeLine = null;
       distance.textContent = formatDistance(routeDistance(points));
-      status.textContent = points.length ? points.length + ' route point' + (points.length===1?'':'s') + ' · straight-line path trace' : 'Tap “Add route points”, then tap the map to trace a route.';
+      status.textContent = message || (points.length ? points.length + ' route points · drawn-line distance' : 'Tap “Add route points”, then tap the map to trace a route.');
     }
-    map.on('click', e => {
-      if (!drawing) return;
-      points.push([e.latlng.lat,e.latlng.lng]);
-      renderRoute();
-    });
+    map.on('click', e => { if (drawing) { points.push([e.latlng.lat,e.latlng.lng]); renderRoute(); } });
     drawButton.addEventListener('click', () => {
       drawing = !drawing;
       drawButton.classList.toggle('primary', drawing);
       drawButton.textContent = drawing ? '✓ Finish route' : '＋ Add route points';
       map.getContainer().style.cursor = drawing ? 'crosshair' : '';
-      status.textContent = drawing ? 'Tap along the path on the map to add route points.' : (points.length ? 'Route trace finished. You can undo points or export GPX.' : 'Tap “Add route points”, then tap the map to trace a route.');
+      renderRoute(drawing ? 'Tap along the path on the map to add route points.' : (points.length ? 'Route trace finished. Undo points or export GPX.' : undefined));
     });
     document.getElementById('undo').addEventListener('click', () => { points.pop(); renderRoute(); });
-    document.getElementById('clear').addEventListener('click', () => { points.length=0; drawing=false; drawButton.classList.remove('primary'); drawButton.textContent='＋ Add route points'; map.getContainer().style.cursor=''; renderRoute(); });
+    document.getElementById('clear').addEventListener('click', () => {
+      points.length=0; drawing=false; drawButton.classList.remove('primary'); drawButton.textContent='＋ Add route points'; map.getContainer().style.cursor=''; renderRoute('Route cleared.');
+    });
     document.getElementById('locate').addEventListener('click', () => {
       if (!navigator.geolocation) { gpsState.textContent='GPS unavailable'; return; }
       gpsState.textContent='Finding GPS…';
@@ -93,13 +101,30 @@
         gpsState.textContent='GPS ±'+Math.round(pos.coords.accuracy)+' m';
       }, err => { gpsState.textContent=err.code===1?'Location denied':'GPS unavailable'; }, {enableHighAccuracy:true,timeout:15000,maximumAge:10000});
     });
+    document.getElementById('gpxFile').addEventListener('change', async event => {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      try {
+        const xml = new DOMParser().parseFromString(await file.text(), 'application/xml');
+        if (xml.querySelector('parsererror')) throw new Error('The file is not valid GPX/XML.');
+        const imported = Array.from(xml.getElementsByTagNameNS('*','trkpt')).map(el => [Number(el.getAttribute('lat')), Number(el.getAttribute('lon'))])
+          .concat(Array.from(xml.getElementsByTagNameNS('*','rtept')).map(el => [Number(el.getAttribute('lat')), Number(el.getAttribute('lon'))]));
+        const valid = imported.filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]) && Math.abs(p[0])<=90 && Math.abs(p[1])<=180);
+        if (valid.length < 2) throw new Error('No usable track or route with at least two points was found.');
+        points.splice(0, points.length, ...valid);
+        drawing=false; drawButton.classList.remove('primary'); drawButton.textContent='＋ Add route points'; map.getContainer().style.cursor='';
+        renderRoute('Imported '+file.name+' · '+valid.length+' points.');
+        map.fitBounds(L.latLngBounds(points), {padding:[24,24]});
+      } catch (err) { status.textContent='GPX import failed: '+err.message; }
+      finally { event.target.value=''; }
+    });
     document.getElementById('gpx').addEventListener('click', () => {
-      if (points.length < 2) { status.textContent='Add at least two route points before exporting GPX.'; return; }
+      if (points.length < 2) { status.textContent='Add or import at least two route points before exporting GPX.'; return; }
       const trkpts = points.map(p => '      <trkpt lat="'+p[0].toFixed(7)+'" lon="'+p[1].toFixed(7)+'"></trkpt>').join('\n');
       const gpx = '<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Footpath Map" xmlns="http://www.topografix.com/GPX/1/1"><trk><name>Footpath Map route</name><trkseg>\n'+trkpts+'\n    </trkseg></trk></gpx>';
       const blob = new Blob([gpx], {type:'application/gpx+xml'});
       const url = URL.createObjectURL(blob), a = document.createElement('a');
-      a.href=url; a.download='footpath-route.gpx'; a.click(); URL.revokeObjectURL(url);
+      a.href=url; a.download='footpath-route.gpx'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
     renderRoute();
   </script>
