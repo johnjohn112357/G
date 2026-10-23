@@ -139,6 +139,40 @@ def calculate(path, d):
             return {"value":result,"from_unit":source,"to_unit":target}
         if category not in tables or source not in tables[category] or target not in tables[category]: raise ValueError("Unsupported category or unit; supported categories: length, speed, mass, pressure, energy, power, volume, temperature")
         return {"value":value*tables[category][source]/tables[category][target],"from_unit":source,"to_unit":target,"category":category}
+    if path == "/api/calculate/gps-distance":
+        lat1, lon1 = number(d,"lat1"), number(d,"lon1")
+        lat2, lon2 = number(d,"lat2"), number(d,"lon2")
+        if not (-90 <= lat1 <= 90 and -90 <= lat2 <= 90 and -180 <= lon1 <= 180 and -180 <= lon2 <= 180): raise ValueError("Latitude must be -90..90 and longitude -180..180")
+        p1, p2 = math.radians(lat1), math.radians(lat2)
+        dp, dl = math.radians(lat2-lat1), math.radians(lon2-lon1)
+        a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+        distance = 6371008.8 * 2 * math.atan2(math.sqrt(a), math.sqrt(max(0.0,1-a)))
+        y = math.sin(dl)*math.cos(p2)
+        x = math.cos(p1)*math.sin(p2)-math.sin(p1)*math.cos(p2)*math.cos(dl)
+        bearing = (math.degrees(math.atan2(y,x))+360)%360
+        return {"distance_m":distance,"distance_km":distance/1000,"initial_bearing_deg":bearing,"model":"great-circle distance using mean Earth radius 6371008.8 m"}
+    if path == "/api/calculate/track-stats":
+        coords = d.get("coordinates")
+        if not isinstance(coords,list) or len(coords)<2 or len(coords)>10000: raise ValueError("coordinates must be a list of 2..10000 [longitude, latitude, optional elevation_m] points")
+        parsed=[]
+        for point in coords:
+            if not isinstance(point,list) or len(point)<2 or len(point)>3: raise ValueError("Each point must contain longitude, latitude, and optional elevation")
+            lon,lat=float(point[0]),float(point[1])
+            if not (math.isfinite(lon) and math.isfinite(lat) and -180<=lon<=180 and -90<=lat<=90): raise ValueError("Coordinates outside valid longitude/latitude bounds")
+            ele=float(point[2]) if len(point)==3 and point[2] is not None else None
+            if ele is not None and not math.isfinite(ele): raise ValueError("Elevation must be finite")
+            parsed.append((lon,lat,ele))
+        distance=ascent=descent=0.0
+        for a,b in zip(parsed,parsed[1:]):
+            lon1,lat1,e1=a; lon2,lat2,e2=b
+            p1,p2=math.radians(lat1),math.radians(lat2)
+            dp,dl=math.radians(lat2-lat1),math.radians(lon2-lon1)
+            h=math.sin(dp/2)**2+math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+            distance += 6371008.8*2*math.atan2(math.sqrt(h),math.sqrt(max(0.0,1-h)))
+            if e1 is not None and e2 is not None:
+                if e2>e1: ascent += e2-e1
+                else: descent += e1-e2
+        return {"point_count":len(parsed),"distance_m":distance,"distance_km":distance/1000,"ascent_m":ascent,"descent_m":descent,"elevation_note":"Ascent/descent includes only adjacent points where both elevations are supplied."}
     raise KeyError(path)
 
 MAPS_HTML = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>Research Toolkit — OS Maps</title>\n<link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\">\n<style>\n:root{color-scheme:light dark}body{font:16px system-ui;margin:0}header{padding:12px 16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}input,select,button{font:inherit;padding:8px;border-radius:6px}#map{height:calc(100dvh - 120px);min-height:360px}.note{padding:0 16px 10px;font-size:13px;opacity:.8}#status{font-size:13px}\n</style></head><body>\n<header><strong>OS Maps</strong>\n<label>Toolkit API key <input id=\"token\" type=\"password\" autocomplete=\"off\" placeholder=\"Bearer token\" size=\"18\"></label>\n<label>Style <select id=\"style\"><option>Leisure</option><option>Outdoor</option><option>Road</option><option>Light</option></select></label>\n<button id=\"load\">Load map</button><span id=\"status\">Enter your toolkit API key to load OS tiles.</span></header>\n<div class=\"note\">Map tiles are requested through the toolkit server; the OS Maps API key stays server-side. OS map data and attribution are subject to Ordnance Survey terms.</div>\n<div id=\"map\" aria-label=\"Interactive Ordnance Survey map\"></div>\n<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>\n<script>\nconst map=L.map('map').setView([52.0,-1.5],7);\nlet layer=null, activeUrls=new Set();\nfunction status(t){document.getElementById('status').textContent=t}\nfunction makeLayer(style,token){return L.gridLayer({tileSize:256,updateWhenIdle:true,keepBuffer:2}).on('tileerror',()=>status('Tile request failed. Check toolkit key, OS_MAPS_API_KEY, and OS Data Hub access.')).addTo(map);}\ndocument.getElementById('load').addEventListener('click',()=>{\n const token=document.getElementById('token').value.trim(),style=document.getElementById('style').value;\n if(!token){status('Enter the toolkit API key first.');return}\n if(layer){map.removeLayer(layer);layer=null}\n layer=L.gridLayer({tileSize:256,keepBuffer:2});\n layer.createTile=function(coords,done){\n  const tile=document.createElement('img');tile.alt='OS map tile';tile.setAttribute('role','presentation');\n  const url='/api/maps/os/'+encodeURIComponent(style)+'/'+coords.z+'/'+coords.x+'/'+coords.y+'.png';\n  fetch(url,{headers:{Authorization:'Bearer '+token}}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.blob()}).then(blob=>{\n   const objectUrl=URL.createObjectURL(blob);activeUrls.add(objectUrl);tile.onload=()=>{URL.revokeObjectURL(objectUrl);activeUrls.delete(objectUrl);done(null,tile)};tile.onerror=()=>{URL.revokeObjectURL(objectUrl);activeUrls.delete(objectUrl);done(new Error('image decode failed'),tile)};tile.src=objectUrl;\n  }).catch(err=>{status('Tile error: '+err.message+'. Check OS Maps API key configured on server.');done(err,tile)});\n  return tile;\n };\n layer.addTo(map);status('Loading OS '+style+' map…');\n});\n</script></body></html>"
