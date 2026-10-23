@@ -10,7 +10,7 @@ AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
 DefaultDirName={autopf}\Woods Route Planner
 DefaultGroupName={#AppName}
-OutputDir=..\dist
+OutputDir=..\..\dist
 OutputBaseFilename=WoodsRoutePlanner-Setup
 Compression=lzma2
 SolidCompression=yes
@@ -20,7 +20,7 @@ PrivilegesRequired=admin
 UninstallDisplayIcon={app}\{#AppExeName}
 
 [Files]
-Source: "..\dist\WoodsRoutePlanner.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\dist\WoodsRoutePlanner.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Woods Route Planner"; Filename: "{app}\{#AppExeName}"
