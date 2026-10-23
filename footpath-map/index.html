@@ -28,6 +28,7 @@
       <option value="Leisure">Leisure</option><option value="Outdoor">Outdoor</option><option value="Road">Road</option><option value="Light">Light</option>
     </select>
     <button class="primary" id="locate">◎ My location</button>
+    <button class="primary" id="plan">Plan foot route</button>
     <button id="draw">＋ Add route points</button>
     <button id="undo">Undo point</button>
     <button id="clear">Clear route</button>
@@ -37,7 +38,7 @@
   </nav>
   <div class="status"><span id="routeStatus" role="status">Tap “Add route points”, then tap the map to trace a route.</span><strong id="distance">0 m</strong></div>
   <main id="map" aria-label="Ordnance Survey map"></main>
-  <footer class="bottom">Map data © Ordnance Survey. Contains OS data © Crown copyright and database rights. Route distance follows your drawn/imported line, not a verified path network. This service does not confirm public rights of way, access permissions, closures or ground conditions. Follow signs and local restrictions.</footer>
+  <footer class="bottom">Map data © Ordnance Survey. Contains OS data © Crown copyright and database rights. Automatic routing uses OpenStreetMap pedestrian data; manual traces use your drawn line. Neither confirms legal access or current path conditions. This service does not confirm public rights of way, access permissions, closures or ground conditions. Follow signs and local restrictions.</footer>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script>
     const map = L.map('map', {zoomControl:true, preferCanvas:true}).setView([51.8787,-0.4200], 13);
@@ -60,6 +61,7 @@
 
     const points = [];
     let routeLine = null, routeMarkers = [], drawing = false, gpsMarker = null, accuracyCircle = null;
+    let autoPickStage = 0, autoStart = null, routeDistanceMeters = null;
     const status = document.getElementById('routeStatus');
     const distance = document.getElementById('distance');
     const gpsState = document.getElementById('gpsState');
@@ -76,12 +78,28 @@
       routeMarkers = [];
       if (points.length) {
         routeLine = L.polyline(points, {color:'#e65c28', weight:5, opacity:.9, lineCap:'round'}).addTo(map);
-        points.forEach((p,i) => routeMarkers.push(L.circleMarker(p,{radius:i===0?7:5,color:'#fff',weight:2,fillColor:'#e65c28',fillOpacity:1}).addTo(map).bindTooltip('Point '+(i+1))));
+        const markerIndexes = points.length > 2 ? [0, points.length-1] : points.map((_,i)=>i);
+        markerIndexes.forEach(i => routeMarkers.push(L.circleMarker(points[i],{radius:i===0?7:5,color:'#fff',weight:2,fillColor:'#e65c28',fillOpacity:1}).addTo(map).bindTooltip(i===0?'Start':(i===points.length-1?'Finish':'Point '+(i+1)))));
       } else routeLine = null;
-      distance.textContent = formatDistance(routeDistance(points));
+      distance.textContent = formatDistance(routeDistanceMeters ?? routeDistance(points));
       status.textContent = message || (points.length ? points.length + ' route points · drawn-line distance' : 'Tap “Add route points”, then tap the map to trace a route.');
     }
-    map.on('click', e => { if (drawing) { points.push([e.latlng.lat,e.latlng.lng]); renderRoute(); } });
+        map.on('click', e => {
+      if (autoPickStage) {
+        if (autoPickStage === 1) { autoStart = [e.latlng.lat, e.latlng.lng]; autoPickStage = 2; status.textContent = 'Start selected. Tap the map again to choose the destination.'; return; }
+        const destination = [e.latlng.lat, e.latlng.lng]; autoPickStage = 0;
+        const planButton = document.getElementById('plan'); planButton.textContent = 'Planning…'; planButton.disabled = true;
+        status.textContent = 'Calculating a pedestrian route…';
+        fetch('/api/route', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({locations:[{lat:autoStart[0],lon:autoStart[1]},{lat:destination[0],lon:destination[1]}]})})
+          .then(async response => { if (!response.ok) throw new Error(response.status===429?'Routing service is busy; try again shortly.':'No route returned. Try endpoints closer to mapped paths.'); return response.json(); })
+          .then(data => { if (!Array.isArray(data.coordinates) || data.coordinates.length<2) throw new Error('Routing service returned no usable route.'); points.splice(0,points.length,...data.coordinates); routeDistanceMeters=Number.isFinite(data.distance_m)?data.distance_m:null; drawing=false; drawButton.classList.remove('primary'); drawButton.textContent='＋ Add route points'; map.getContainer().style.cursor=''; planButton.classList.remove('primary'); renderRoute('Pedestrian route calculated from OpenStreetMap data. Access rights are not verified.'); map.fitBounds(L.latLngBounds(points),{padding:[28,28]}); })
+          .catch(err => { status.textContent='Route failed: '+err.message; })
+          .finally(() => { planButton.disabled=false; planButton.textContent='Plan foot route'; });
+        return;
+      }
+      if (drawing) { points.push([e.latlng.lat,e.latlng.lng]); routeDistanceMeters=null; renderRoute(); }
+    });
+    document.getElementById('plan').addEventListener('click', () => { autoPickStage=1; autoStart=null; drawing=false; drawButton.classList.remove('primary'); drawButton.textContent='＋ Add route points'; map.getContainer().style.cursor='crosshair'; document.getElementById('plan').classList.add('primary'); status.textContent='Tap the map to choose the route start.'; });
     drawButton.addEventListener('click', () => {
       drawing = !drawing;
       drawButton.classList.toggle('primary', drawing);
@@ -89,9 +107,9 @@
       map.getContainer().style.cursor = drawing ? 'crosshair' : '';
       renderRoute(drawing ? 'Tap along the path on the map to add route points.' : (points.length ? 'Route trace finished. Undo points or export GPX.' : undefined));
     });
-    document.getElementById('undo').addEventListener('click', () => { points.pop(); renderRoute(); });
+    document.getElementById('undo').addEventListener('click', () => { points.pop(); routeDistanceMeters=null; renderRoute(); });
     document.getElementById('clear').addEventListener('click', () => {
-      points.length=0; drawing=false; drawButton.classList.remove('primary'); drawButton.textContent='＋ Add route points'; map.getContainer().style.cursor=''; renderRoute('Route cleared.');
+      points.length=0; routeDistanceMeters=null; autoPickStage=0; drawing=false; drawButton.classList.remove('primary'); drawButton.textContent='＋ Add route points'; map.getContainer().style.cursor=''; renderRoute('Route cleared.');
     });
     document.getElementById('locate').addEventListener('click', () => {
       if (!navigator.geolocation) { gpsState.textContent='GPS unavailable'; return; }
@@ -120,7 +138,7 @@
         const imported = sourcePoints.map(el => [Number(el.getAttribute('lat')), Number(el.getAttribute('lon'))]);
         const valid = imported.filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]) && Math.abs(p[0])<=90 && Math.abs(p[1])<=180);
         if (valid.length < 2) throw new Error('No usable route or track with at least two points was found.');
-        points.splice(0, points.length, ...valid);
+        points.splice(0, points.length, ...valid); routeDistanceMeters=null;
         drawing=false; drawButton.classList.remove('primary'); drawButton.textContent='＋ Add route points'; map.getContainer().style.cursor='';
         renderRoute('Imported '+file.name+' · '+valid.length+' points.');
         map.fitBounds(L.latLngBounds(points), {padding:[24,24]});
