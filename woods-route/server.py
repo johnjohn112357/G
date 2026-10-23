@@ -91,31 +91,47 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 lat=float(q.get("lat",[""])[0]);lon=float(q.get("lon",[""])[0]);radius=float(q.get("radius",["5"])[0])
                 if not (-90<=lat<=90 and -180<=lon<=180) or not (1<=radius<=50):return self.send_json(400,{"error":"Invalid location or radius (1–50 km)."})
-                # Convert radius to a conservative bounding box, then filter candidates by haversine distance.
+                # Query the full radius bounding box, then retain every mapped woodland whose representative point is within the selected radius.
                 dlat=radius/111.0;dlon=radius/(111.0*max(0.15,abs(__import__("math").cos(__import__("math").radians(lat)))))
                 s,w,n,e=lat-dlat,lon-dlon,lat+dlat,lon+dlon
                 query=f"""[out:json][timeout:40];(way[landuse=forest]({s},{w},{n},{e});way[natural=wood]({s},{w},{n},{e});relation[landuse=forest]({s},{w},{n},{e});relation[natural=wood]({s},{w},{n},{e}););out center geom;"""
                 raw=fetch_json(OVERPASS,data=urllib.parse.urlencode({"data":query}).encode(),headers={"Content-Type":"application/x-www-form-urlencoded","User-Agent":"WoodsRoutePlanner/1.0"},timeout=50)
                 import math
-                features=[]
+                features=[];seen=set()
                 for el in raw.get("elements",[]):
-                    tags=el.get("tags",{}); coords=[]
+                    key=(el.get("type"),el.get("id"))
+                    if key in seen:continue
+                    seen.add(key)
+                    tags=el.get("tags",{});coords=[];geom=None
                     if el.get("type")=="way":
                         coords=[[p["lon"],p["lat"]] for p in el.get("geometry",[]) if "lon" in p and "lat" in p]
-                    elif el.get("center"):
-                        coords=[[el["center"]["lon"],el["center"]["lat"]]]
-                    if not coords:continue
-                    clon=sum(p[0] for p in coords)/len(coords);clat=sum(p[1] for p in coords)/len(coords)
+                        if len(coords)>=4 and coords[0]==coords[-1]:
+                            geom={"type":"Polygon","coordinates":[coords]}
+                    elif el.get("type")=="relation":
+                        # Multipolygon relations often contain the actual woodland outline in outer member ways.
+                        rings=[]
+                        for member in el.get("members",[]):
+                            if member.get("role")!="outer" or member.get("type")!="way":continue
+                            ring=[[p["lon"],p["lat"]] for p in member.get("geometry",[]) if "lon" in p and "lat" in p]
+                            if len(ring)>=4 and ring[0]==ring[-1]:rings.append(ring)
+                        if rings:
+                            geom={"type":"Polygon","coordinates":rings}
+                    center=el.get("center")
+                    if center:
+                        clon=float(center["lon"]);clat=float(center["lat"])
+                    elif coords:
+                        clon=sum(p[0] for p in coords)/len(coords);clat=sum(p[1] for p in coords)/len(coords)
+                    elif geom and geom["coordinates"] and geom["coordinates"][0]:
+                        ring=geom["coordinates"][0];clon=sum(p[0] for p in ring)/len(ring);clat=sum(p[1] for p in ring)/len(ring)
+                    else:continue
                     dist=2*6371*math.asin(min(1,math.sqrt(math.sin(math.radians(clat-lat)/2)**2+math.cos(math.radians(lat))*math.cos(math.radians(clat))*math.sin(math.radians(clon-lon)/2)**2)))
                     if dist>radius:continue
-                    if el.get("type")=="way" and len(coords)>=4 and coords[0]==coords[-1]:
-                        geom={"type":"Polygon","coordinates":[coords]}
-                    elif el.get("center"):
-                        geom={"type":"Point","coordinates":[clon,clat]}
-                    else:continue
-                    features.append({"type":"Feature","geometry":geom,"properties":{"name":tags.get("name","Unnamed woodland"),"kind":tags.get("natural") or tags.get("landuse") or "woodland","distance_km":round(dist,2)}})
+                    if geom is None:geom={"type":"Point","coordinates":[clon,clat]}
+                    features.append({"type":"Feature","geometry":geom,"properties":{"osm_type":el.get("type"),"osm_id":el.get("id"),"name":tags.get("name","Unnamed woodland"),"kind":tags.get("natural") or tags.get("landuse") or "woodland","distance_km":round(dist,2)}})
                 return self.send_json(200,{"woods":{"type":"FeatureCollection","features":features},"count":len(features),"radius_km":radius})
-            except Exception:return self.send_json(502,{"error":"OpenStreetMap woodland search is busy or unavailable. Try again."})
+            except Exception as exc:
+                print("Nearby woodland search error: %s" % exc,flush=True)
+                return self.send_json(502,{"error":"OpenStreetMap woodland search is busy or unavailable. Try again."})
         if path=="/api/woods":
             try:
                 s,w,n,e=map(float,q.get("bbox",[""])[0].split(","))
