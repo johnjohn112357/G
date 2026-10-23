@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """Woods Route Planner — woodland-focused map and pedestrian route planner."""
-import json, os, urllib.error, urllib.parse, urllib.request, re
+import json, os, urllib.error, urllib.parse, urllib.request, re, socket
+
+// Force outbound HTTP lookups to IPv4: Render logs show Errno 101 Network is unreachable on data-source calls.
+_original_getaddrinfo = socket.getaddrinfo
+def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    if family in (0, socket.AF_UNSPEC):
+        family = socket.AF_INET
+    return _original_getaddrinfo(host, port, family, type, proto, flags)
+socket.getaddrinfo = _ipv4_getaddrinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT=int(os.environ.get("PORT","10000"))
 OS_MAPS_API_KEY=os.environ.get("OS_MAPS_API_KEY","").strip()  # retained for compatibility; basemap now uses OpenStreetMap
