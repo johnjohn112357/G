@@ -2,6 +2,11 @@
 
 A lightweight Python HTTP API for engineering calculations and a persistent evidence/network ledger.
 
+## Browser dashboard
+- Open `/tools` for a browser-based calculation console covering the supported engineering, GPS and unit-conversion endpoints.
+- `/tools` is a public static page; calculation API requests still require the toolkit bearer key. The key is typed into the page and sent only as an Authorization header.
+- `/` redirects to `/tools`; the map viewer remains at `/maps`.
+
 ## Deploy on Render
 - Runtime: Python
 - Build command: `python -m compileall -q .`
