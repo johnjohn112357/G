@@ -113,8 +113,12 @@ class Handler(BaseHTTPRequestHandler):
                 dlat=radius/111.0;dlon=radius/(111.0*max(0.15,abs(math.cos(math.radians(lat)))))
                 south,west,north,east=lat-dlat,lon-dlon,lat+dlat,lon+dlon
                 query=f"""[out:json][timeout:40];(way[landuse=forest]({south},{west},{north},{east});way[natural=wood]({south},{west},{north},{east});relation[landuse=forest]({south},{west},{north},{east});relation[natural=wood]({south},{west},{north},{east}););out center geom;"""
-                raw=fetch_overpass(query,timeout=50)
-                features=[];seen=set()
+                features=[];seen=set();overpass_failed=False
+                try:
+                    raw=fetch_overpass(query,timeout=25)
+                except Exception as ex:
+                    print("Nearby OSM woodland query failed; continuing with official inventories: %s"%ex,flush=True)
+                    raw={"elements":[]};overpass_failed=True
                 def add_feature(geom,props,source):
                     coords=[]
                     def visit(v):
@@ -127,7 +131,9 @@ class Handler(BaseHTTPRequestHandler):
                     if not coords:return
                     clon=sum(p[0] for p in coords)/len(coords);clat=sum(p[1] for p in coords)/len(coords)
                     dist=2*6371*math.asin(min(1,math.sqrt(math.sin(math.radians(clat-lat)/2)**2+math.cos(math.radians(lat))*math.cos(math.radians(clat))*math.sin(math.radians(clon-lon)/2)**2)))
-                    if dist>radius:return
+                    # Polygon centroids can fall outside the search radius even when woodland touches it.
+                    # Keep polygons returned by the intersecting bounding-box query; filter point pins by radius.
+                    if geom.get("type")=="Point" and dist>radius:return
                     props=dict(props or {});props["source"]=source;props["distance_km"]=round(dist,2)
                     features.append({"type":"Feature","geometry":geom,"properties":props})
                 for el in raw.get("elements",[]):
@@ -171,7 +177,9 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception as ex:
                         print("Official woodland source %s failed: %s"%(source,ex),flush=True)
                         official_errors.append(source)
-                return self.send_json(200,{"woods":{"type":"FeatureCollection","features":features},"count":len(features),"radius_km":radius,"sources":["OpenStreetMap"]+[x for x in ["National Forest Inventory","Ancient Woodland"] if x not in official_errors],"partial_sources":official_errors})
+                sources=([] if overpass_failed else ["OpenStreetMap"])+[x for x in ["National Forest Inventory","Ancient Woodland"] if x not in official_errors]
+                partial_sources=(["OpenStreetMap"] if overpass_failed else [])+official_errors
+                return self.send_json(200,{"woods":{"type":"FeatureCollection","features":features},"count":len(features),"radius_km":radius,"sources":sources,"partial_sources":partial_sources})
             except Exception as exc:
                 print("Nearby woodland search error: %s" % exc,flush=True)
                 return self.send_json(502,{"error":"Woodland search failed. Try again in a moment."})
