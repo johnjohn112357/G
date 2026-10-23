@@ -1,225 +1,134 @@
 #!/usr/bin/env python3
-"""Woods Route Planner — woodland-focused map and pedestrian route planner."""
-import json, os, urllib.error, urllib.parse, urllib.request, re, socket
-
-# Force outbound HTTP lookups to IPv4: Render logs show Errno 101 Network is unreachable on data-source calls.
-_original_getaddrinfo = socket.getaddrinfo
-def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-    if family in (0, socket.AF_UNSPEC):
-        family = socket.AF_INET
-    return _original_getaddrinfo(host, port, family, type, proto, flags)
-socket.getaddrinfo = _ipv4_getaddrinfo
+"""Woods Route Planner v2: simple, resilient woodland and footpath map."""
+import json, os, urllib.parse, urllib.request, urllib.error, math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-PORT=int(os.environ.get("PORT","10000"))
-OS_MAPS_API_KEY=os.environ.get("OS_MAPS_API_KEY","").strip()  # optional OS Maps key; basemap uses Esri World Topographic Map
-OVERPASS_SERVERS=["https://overpass.kumi.systems/api/interpreter","https://overpass-api.de/api/interpreter"]
-VALHALLA="https://valhalla1.openstreetmap.de/route"
-TILE_RE=re.compile(r"^/api/tiles/(Leisure|Outdoor|Road|Light)/(\d{1,2})/(\d{1,7})/(\d{1,7})\.png$")
 
-HTML=r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Woods Route Planner</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"><link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.css"><style>
-:root{color-scheme:light;--green:#214d35;--pale:#edf3e9;--ink:#17251b}*{box-sizing:border-box}body{margin:0;font:16px system-ui,sans-serif;color:var(--ink);background:#f8faf6}header{background:var(--green);color:white;padding:15px 18px}h1{font-size:1.25rem;margin:0}header p{margin:4px 0 0;font-size:.9rem;opacity:.9}main{display:grid;grid-template-columns:minmax(260px,340px) 1fr;min-height:calc(100vh - 78px)}aside{padding:16px;background:white;border-right:1px solid #d8e0d5;overflow:auto}label{display:block;font-weight:650;margin:12px 0 5px}input,select,button{font:inherit;width:100%;padding:11px;border:1px solid #bbc8b9;border-radius:9px;background:white;color:var(--ink)}button{background:var(--green);color:white;font-weight:700;border:0;margin-top:10px;cursor:pointer}button.secondary{background:var(--pale);color:var(--green);border:1px solid #c9d7c7}#map{height:calc(100vh - 78px);min-height:480px;background:#f4f5ef}.note{font-size:.86rem;color:#4b5d4d;line-height:1.45}.status{padding:10px;border-radius:8px;background:var(--pale);margin-top:12px;font-size:.9rem;white-space:pre-wrap}.legend{display:flex;gap:10px;align-items:center;font-size:.85rem;margin-top:12px}.swatch{width:15px;height:15px;border-radius:4px;background:#6f9c62;border:1px solid #456e3b}@media(max-width:760px){main{display:flex;flex-direction:column;min-height:calc(100vh - 78px)}#map{order:-1;height:60vh;min-height:360px;flex:0 0 60vh}aside{order:0;overflow:visible;border-right:0;border-top:1px solid #d8e0d5}header{padding:13px 15px}}
-</style></head><body><header><h1>🌲 Woods Route Planner</h1><p>Woodland map, trail-priority routes and live phone GPS.</p></header><main><aside>
-<p class="note">Tap the map to set start and destination. Turn on live GPS to show your current position as you move.</p>
-<label for="search">Find a place or woodland</label><input id="search" placeholder="e.g. Ashridge Estate, Hertfordshire"><button id="find" class="secondary">Find place</button>
-<p class="note">Map background: Esri World Topographic Map · mapped woodland highlighted red</p>
-<button id="gps">Show my location (live GPS)</button><button id="stopgps" class="secondary">Stop live GPS</button>
-<label for="radius">Search radius around my location</label><select id="radius"><option value="2">2 km</option><option value="5" selected>5 km</option><option value="10">10 km</option><option value="20">20 km</option><option value="30">30 km</option><option value="50">50 km</option></select><button id="nearwoods">Show woods within radius</button>
-<label>Route preference</label><select id="mode"><option value="trails">Prefer trails and tracks; minimise road use</option></select>
-<button id="route">Plan route</button><button id="clear" class="secondary">Clear route and pins</button><div class="legend"><span class="swatch"></span> Mapped woodland</div><div id="status" class="status">Loading woodland data…</div>
-<p class="note">GPS requires permission in your phone browser and a secure HTTPS connection. Your position is shown on this map while live tracking is enabled. The map background uses Esri World Topographic Map tiles. Woodland and path overlays still use OpenStreetMap data plus official woodland datasets where available. Routing prefers trails but cannot guarantee woodland-only travel or exclude all roads. Check local access signs; mapped paths do not prove legal right-of-way.</p>
-</aside><div id="map"><iframe id="fallback-map" title="Fallback OpenStreetMap map" src="https://www.openstreetmap.org/export/embed.html?bbox=-0.55%2C51.76%2C-0.29%2C51.87&layer=mapnik&marker=51.815%2C-0.42" style="display:block;width:100%;height:100%;min-height:360px;border:0" loading="eager" referrerpolicy="no-referrer"></iframe></div></main><script>(function(){const s=document.getElementById("status"),frame=document.getElementById("fallback-map"),gps=document.getElementById("gps"),stop=document.getElementById("stopgps");let watch=null,frameCentered=false;function err(e){s.textContent="GPS error: "+({1:"Location permission denied. In Android Settings, allow location for Chrome and this site.",2:"Phone could not determine location. Turn on device Location and try outdoors.",3:"GPS timed out. Keep the page open and retry outdoors."}[e.code]||e.message)}gps.onclick=function(){if(!navigator.geolocation){s.textContent="GPS API unavailable. Open the HTTPS link directly in Chrome.";return}if(watch!==null)return;s.textContent="Requesting phone location… allow permission if prompted.";watch=navigator.geolocation.watchPosition(function(p){const lat=p.coords.latitude,lon=p.coords.longitude,delta=0.04;s.textContent="GPS FIX: "+lat.toFixed(6)+", "+lon.toFixed(6)+" (accuracy ±"+Math.round(p.coords.accuracy)+" m).";if(!frameCentered){frame.src="https://www.openstreetmap.org/export/embed.html?bbox="+(lon-delta)+"%2C"+(lat-delta)+"%2C"+(lon+delta)+"%2C"+(lat+delta)+"&layer=mapnik&marker="+lat+"%2C"+lon;frameCentered=true;}},function(e){watch=null;err(e)},{enableHighAccuracy:true,maximumAge:0,timeout:30000})};stop.onclick=function(){if(watch!==null)navigator.geolocation.clearWatch(watch);watch=null;s.textContent="Live GPS stopped."};if(s.textContent.indexOf("Loading woodland data")===0)s.textContent="Basic map ready. GPS can run independently; tap Show my location.";})();</script><script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script><script src="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.js"></script><script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.1/leaflet-maplibre-gl.js"></script><script>
-document.getElementById('map').innerHTML='';if(!window.L){document.getElementById('status').textContent='Map library failed to load.';throw new Error('Leaflet failed')}
+PORT = int(os.environ.get("PORT", "10000"))
+VALHALLA_URL = "https://valhalla1.openstreetmap.de/route"
+OVERPASS = [
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+]
+HTML = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Woods Route Planner</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+*{box-sizing:border-box}body{margin:0;font:15px system-ui,-apple-system,sans-serif;color:#17251b;background:#f6f8f4}header{background:#173e2a;color:#fff;padding:12px 16px}h1{font-size:20px;margin:0}header p{margin:3px 0 0;font-size:13px;opacity:.9}main{display:grid;grid-template-columns:320px 1fr;height:calc(100dvh - 65px)}aside{padding:14px;overflow:auto;background:#fff;border-right:1px solid #d7dfd4}#map{height:100%;min-height:380px;background:#e8ede5}label{display:block;font-weight:650;margin:13px 0 5px}input,select,button{font:inherit;width:100%;padding:10px;border-radius:8px;border:1px solid #bdc9bb;background:white;color:#17251b}button{margin-top:8px;background:#245438;color:#fff;border:0;font-weight:700}button.alt{background:#edf3e9;color:#245438;border:1px solid #cbd9c7}.row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.status{white-space:pre-wrap;background:#edf3e9;border-radius:8px;padding:10px;margin-top:12px;font-size:13px;line-height:1.4}.help{font-size:12px;line-height:1.45;color:#566456}.legend{display:flex;align-items:center;gap:7px;font-size:12px;margin-top:10px}.dot{width:12px;height:12px;background:#d92332;border-radius:50%;display:inline-block}@media(max-width:720px){main{display:flex;flex-direction:column;height:auto;min-height:calc(100dvh - 65px)}#map{order:0;height:53dvh;min-height:330px;flex:none}aside{order:1;overflow:visible}header{padding:10px 13px}}
+</style></head><body>
+<header><h1>🌲 Woods Route Planner</h1><p>Find woods, see footpaths and plan a walking route</p></header>
+<main><aside>
+<label for="place">Find a place or woodland</label><input id="place" placeholder="e.g. Ashridge Estate">
+<button id="find" class="alt">Find place</button>
+<div class="row"><button id="gps">Use my GPS</button><button id="nearby" class="alt">Woods near me</button></div>
+<label for="radius">Woodland search radius</label><select id="radius"><option value="2">2 km</option><option value="5" selected>5 km</option><option value="10">10 km</option><option value="20">20 km</option><option value="30">30 km</option><option value="50">50 km</option></select>
+<p class="help">To plan a route, tap the map once for the start and again for the destination. Or use GPS for the start, then tap a destination.</p>
+<div class="row"><button id="route">Plan walking route</button><button id="reset" class="alt">Reset</button></div>
+<div class="legend"><span class="dot"></span> Woodland / point of interest</div><div class="status" id="status">Starting map…</div>
+<p class="help">Map tiles: Esri World Topographic Map. Woodland and paths: OpenStreetMap plus official woodland inventories where available. Routing: Valhalla with BRouter fallback. Check signs and legal access; a mapped path does not itself prove public right of way.</p>
+</aside><div id="map"></div></main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function(){
+const $=id=>document.getElementById(id),status=t=>$('status').textContent=t;
+if(!window.L){status('Map library failed to load. Check connection and reload.');return}
 const map=L.map('map').setView([51.815,-0.42],12);
-L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{attribution:'Tiles &copy; Esri — Sources: Esri, USGS, NOAA',maxZoom:19}).addTo(map);
-const woods=L.geoJSON(null,{style:{color:'#b51224',weight:2.8,fillColor:'#e32636',fillOpacity:.78},onEachFeature:(f,l)=>l.bindTooltip(f.properties?.name||'Woodland')}).addTo(map);
-const woodPins=L.layerGroup().addTo(map);function refreshWoodPins(fc){woodPins.clearLayers();let count=0;(fc?.features||[]).forEach(f=>{try{const p=f.properties||{};let ll;if(f.geometry?.type==='Point')ll=L.latLng(f.geometry.coordinates[1],f.geometry.coordinates[0]);else{const b=L.geoJSON(f).getBounds();if(!b.isValid())return;ll=b.getCenter()}if(!ll||!Number.isFinite(ll.lat))return;const label=String(p.name||p.NAME||p.Name||'Woodland').replace(/[&<>]/g,'');const icon=L.divIcon({className:'wood-pin-icon',html:'<div style="font-size:27px;line-height:30px;text-shadow:0 1px 3px #fff,1px 1px 2px #222">📍</div>',iconSize:[30,34],iconAnchor:[15,32]});const marker=L.marker(ll,{icon:icon,zIndexOffset:1000,keyboard:true,alt:label,title:label}).bindPopup('<b>'+label+'</b><br>Woodland point of interest');woodPins.addLayer(marker);count++}catch(e){console.warn('Could not create woodland pin',e)}});console.info('Woodland pin overlay: '+count+' pins from '+(fc?.features?.length||0)+' features');return count}
-const trails=L.geoJSON(null,{style:{color:'#8b6b42',weight:2,opacity:.9}}).addTo(map);
-let start=null,end=null,startMarker=null,endMarker=null,routeLine=null,gpsWatch=null,positionMarker=null,accuracyCircle=null,nearbyWoodsLayer=null,nearbyCircle=null,currentGPS=null;
-const status=t=>document.getElementById('status').textContent=t;
-function marker(ll,label){return L.marker(ll,{draggable:true}).addTo(map).bindPopup(label)}
-function setPoint(ll){if(!start){start=ll;if(startMarker)map.removeLayer(startMarker);startMarker=marker(ll,'Start');startMarker.on('dragend',e=>start=e.target.getLatLng());status('Start set. Tap the map to set destination.')}else{end=ll;if(endMarker)map.removeLayer(endMarker);endMarker=marker(ll,'Destination');endMarker.on('dragend',e=>end=e.target.getLatLng());status('Start and destination set. Tap Plan route.')}}
-map.on('click',e=>setPoint(e.latlng));
-async function loadData(){const b=map.getBounds(),box=[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()].join(',');const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),8000);try{const r=await fetch('/api/woods?bbox='+encodeURIComponent(box),{signal:controller.signal}),d=await r.json();if(!r.ok)throw Error(d.error||'Woodland query failed');woods.clearLayers();trails.clearLayers();woods.addData(d.woods);trails.addData(d.trails);refreshWoodPins(d.woods);status('Loaded '+d.woodland_count+' woodland areas and '+d.trail_count+' mapped trail segments, with pins.')}catch(e){try{status('Server woodland data unavailable; checking OpenStreetMap directly…');const q='[out:json][timeout:20];(way[landuse=forest]('+box+');way[natural=wood]('+box+');way[highway~"path|footway|track|bridleway|steps"]('+box+'););out geom;';const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),12000);let raw;try{let rr;let last;for(const endpoint of ['https://overpass.kumi.systems/api/interpreter','https://overpass-api.de/api/interpreter']){try{rr=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:'data='+encodeURIComponent(q),signal:ctl.signal});if(!rr.ok)throw Error('HTTP '+rr.status);raw=await rr.json();break}catch(ex){last=ex}}if(!raw)throw last||Error('No response')}finally{clearTimeout(t)}const wf=[],tf=[];for(const el of (raw.elements||[])){const pts=(el.geometry||[]).filter(p=>Number.isFinite(p.lon)&&Number.isFinite(p.lat)).map(p=>[p.lon,p.lat]);if(pts.length<2)continue;const tags=el.tags||{},isWood=tags.landuse==='forest'||tags.natural==='wood',closed=pts.length>=4&&pts[0][0]===pts[pts.length-1][0]&&pts[0][1]===pts[pts.length-1][1];if(isWood&&closed)wf.push({type:'Feature',geometry:{type:'Polygon',coordinates:[pts]},properties:{name:tags.name||'Mapped woodland'}});else if(!isWood)tf.push({type:'Feature',geometry:{type:'LineString',coordinates:pts},properties:{name:tags.name||tags.highway||'Footpath'}})}woods.clearLayers();trails.clearLayers();const visibleWoods={type:'FeatureCollection',features:wf};woods.addData(visibleWoods);trails.addData({type:'FeatureCollection',features:tf});const pinCount=refreshWoodPins(visibleWoods);status('Direct OpenStreetMap: '+wf.length+' woodland areas and '+tf.length+' mapped paths in view; '+pinCount+' pins shown.')}catch(fallbackError){status('Woodland pins unavailable: '+fallbackError.message+'. Try Show woods within radius after GPS, or zoom in and retry.')}}finally{clearTimeout(timeout)}}
-let moveTimer;map.on('moveend',()=>{clearTimeout(moveTimer);moveTimer=setTimeout(loadData,500)});loadData();
-function gpsError(e){status('GPS unavailable: '+({1:'Location permission denied. Allow location access for this site in your browser settings.',2:'Phone could not determine your location; check GPS and signal.',3:'GPS request timed out; try again outdoors.'}[e.code]||e.message))}
-document.getElementById('gps').onclick=()=>{if(!navigator.geolocation){status('GPS is unavailable in this browser. Open the HTTPS planner directly in Chrome, not inside an in-app browser.');return}if(gpsWatch!==null)return;status('Requesting GPS fix… allow location permission and wait outdoors for a clear signal.');gpsWatch=navigator.geolocation.watchPosition(p=>{const ll=L.latLng(p.coords.latitude,p.coords.longitude);currentGPS=ll;if(!positionMarker){positionMarker=L.circleMarker(ll,{radius:9,color:'#fff',weight:3,fillColor:'#1479ee',fillOpacity:1}).addTo(map).bindPopup('Your live GPS position');map.setView(ll,15)}else positionMarker.setLatLng(ll);if(accuracyCircle)map.removeLayer(accuracyCircle);accuracyCircle=L.circle(ll,{radius:p.coords.accuracy,color:'#1479ee',weight:1,fillOpacity:.08}).addTo(map);start=ll;if(startMarker){startMarker.setLatLng(ll)}else{startMarker=marker(ll,'Route start (GPS)');startMarker.on('dragend',e=>start=e.target.getLatLng())}status('GPS fix acquired: '+ll.lat.toFixed(5)+', '+ll.lng.toFixed(5)+' (accuracy about '+Math.round(p.coords.accuracy)+' m). Blue dot marks your position; location is set as route start.')},e=>{gpsWatch=null;gpsError(e)},{enableHighAccuracy:true,maximumAge:0,timeout:30000})};
-document.getElementById('stopgps').onclick=()=>{if(gpsWatch!==null)navigator.geolocation.clearWatch(gpsWatch);gpsWatch=null;status('Live GPS stopped. Last position remains on the map.')};
-document.getElementById('route').onclick=async()=>{if(!start||!end){status('Set start and destination first. Use live GPS or tap the map twice.');return}status('Calculating trail-priority walking route…');try{const r=await fetch('/api/route',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start:{lat:start.lat,lng:start.lng},end:{lat:end.lat,lng:end.lng}})}),d=await r.json();if(!r.ok)throw Error(d.error||'Routing failed');if(routeLine)map.removeLayer(routeLine);routeLine=L.geoJSON(d.geometry,{style:{color:'#2468b4',weight:5,opacity:.9}}).addTo(map);map.fitBounds(routeLine.getBounds(),{padding:[25,25]});status('Route: '+d.distance_km.toFixed(2)+' km · approx. '+Math.round(d.duration_min)+' min. '+d.note)}catch(e){status('Route failed: '+e.message)}};
-document.getElementById('clear').onclick=()=>{start=end=null;[startMarker,endMarker,routeLine].forEach(x=>{if(x)map.removeLayer(x)});startMarker=endMarker=routeLine=null;status('Route pins cleared. Live GPS marker remains if active.')};
-document.getElementById('nearwoods').onclick=async()=>{const center=currentGPS;if(!center){status('GPS fix required. Tap Show my location (live GPS), wait for the blue dot, then search.');return}const km=Number(document.getElementById('radius').value);status('GPS locked at '+center.lat.toFixed(5)+', '+center.lng.toFixed(5)+'. Searching within '+km+' km…');try{let d;try{const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),8000);let r;try{r=await fetch('/api/nearby-woods?lat='+center.lat+'&lon='+center.lng+'&radius='+km,{signal:controller.signal})}finally{clearTimeout(timeout)}d=await r.json();if(!r.ok)throw Error(d.error||'Server woodland search failed')}catch(serverError){status('Server data source unavailable; trying direct OpenStreetMap lookup…');const query='[out:json][timeout:35];(way[landuse=forest](around:'+(km*1000)+','+center.lat+','+center.lng+');way[natural=wood](around:'+(km*1000)+','+center.lat+','+center.lng+');relation[landuse=forest](around:'+(km*1000)+','+center.lat+','+center.lng+');relation[natural=wood](around:'+(km*1000)+','+center.lat+','+center.lng+'););out center tags;';let raw,lastError;for(const endpoint of ['https://overpass.kumi.systems/api/interpreter','https://overpass-api.de/api/interpreter']){try{const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),12000);let rr;try{rr=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:'data='+encodeURIComponent(query),signal:controller.signal})}finally{clearTimeout(timeout)}if(!rr.ok)throw Error('HTTP '+rr.status);raw=await rr.json();break}catch(err){lastError=err}}if(!raw)throw Error('OpenStreetMap lookup also failed ('+(lastError?.message||serverError.message)+').');const features=(raw.elements||[]).filter(el=>el.center).map(el=>({type:'Feature',geometry:{type:'Point',coordinates:[el.center.lon,el.center.lat]},properties:{name:el.tags?.name||'Unnamed woodland',kind:el.tags?.natural||el.tags?.landuse||'woodland',source:'OpenStreetMap',osm_id:el.id, distance_km:(L.latLng(center).distanceTo([el.center.lat,el.center.lon])/1000).toFixed(2)}}));d={woods:{type:'FeatureCollection',features},count:features.length,partial_sources:['Official inventories (server unavailable)']}}if(nearbyWoodsLayer)map.removeLayer(nearbyWoodsLayer);if(nearbyCircle)map.removeLayer(nearbyCircle);refreshWoodPins(d.woods);nearbyWoodsLayer=L.geoJSON(d.woods,{style:f=>{const src=f.properties?.source||'';return src==='Ancient Woodland'?{color:'#e32636',weight:3,fillColor:'#e32636',fillOpacity:.30}:src==='National Forest Inventory'?{color:'#e32636',weight:2.5,fillColor:'#e32636',fillOpacity:.25}:{color:'#e32636',weight:2.5,fillColor:'#e32636',fillOpacity:.25}},pointToLayer:(f,ll)=>L.marker(ll,{icon:L.divIcon({className:'wood-pin-wrap',html:'<span style="display:block;width:16px;height:16px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:'+('#e32636')+';border:2px solid white;box-shadow:0 1px 5px #333;'></span>',iconSize:[18,18],iconAnchor:[9,16]})}),onEachFeature:(f,l)=>{const p=f.properties||{};l.bindPopup('<b>'+(p.name||'Unnamed woodland')+'</b><br>'+((p.distance_km??'?')+' km from your location')+'<br>'+(p.kind||'Woodland')+'<br><small>Source: '+(p.source||'OpenStreetMap')+'</small>');}}).addTo(map);const pinCount=refreshWoodPins(d.woods);nearbyCircle=L.circle(center,{radius:km*1000,color:'#386f9b',weight:1,fillOpacity:.03}).addTo(map);if(d.woods.features.length){const bounds=nearbyWoodsLayer.getBounds();bounds.extend(center);map.fitBounds(bounds,{padding:[20,20]});status('Showing '+d.count+' woodland pinpoints within '+km+' km. Tap a pin for its name and distance.'+(d.partial_sources?.length?' Some data sources unavailable: '+d.partial_sources.join(', ')+'.':''))}else{map.setView(center,Math.max(10,15-Math.round(Math.log2(km))));status('No mapped woodland features found within '+km+' km. Try a larger radius.')}}catch(e){status('Woodland pin search failed: '+e.message)}};
-async function findPlace(){const input=document.getElementById('search'),q=input.value.trim();if(!q){status('Type a place or woodland name first, e.g. Ashridge Estate, then tap Find place.');input.focus();return}status('Searching for “'+q+'”…');try{let d;try{const r=await fetch('/api/search?q='+encodeURIComponent(q),{cache:'no-store'});d=await r.json();if(!r.ok)throw Error(d.error||'Server search failed')}catch(serverError){status('Trying direct map search…');const url='https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q='+encodeURIComponent(q);const r=await fetch(url,{headers:{'Accept':'application/json'}});if(!r.ok)throw Error('Map search service returned HTTP '+r.status);const a=await r.json();if(!a.length)throw Error('No matching place found. Try a more specific name.');d={lat:Number(a[0].lat),lon:Number(a[0].lon),name:a[0].display_name}}if(!Number.isFinite(Number(d.lat))||!Number.isFinite(Number(d.lon)))throw Error('Search returned an invalid location');const ll=L.latLng(Number(d.lat),Number(d.lon));map.setView(ll,15);L.marker(ll).addTo(map).bindPopup('<b>'+String(d.name||q).replace(/[&<>]/g,'')+'</b>').openPopup();status('Found: '+(d.name||q)+'. Map centred on the result.')}catch(e){status('Place search failed: '+e.message+'. Check your connection or try another name.')}}document.getElementById('find').onclick=findPlace;document.getElementById('search').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();findPlace()}});
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles © Esri, USGS, NOAA'}).addTo(map);
+const woods=L.geoJSON(null,{style:{color:'#bd1726',weight:2,fillColor:'#e32636',fillOpacity:.26},pointToLayer:(f,ll)=>L.circleMarker(ll,{radius:7,color:'#fff',weight:2,fillColor:'#d92332',fillOpacity:1}),onEachFeature:(f,l)=>{const p=f.properties||{};l.bindPopup('<b>'+safe(p.name||p.NAME||'Woodland')+'</b><br>'+safe(p.source||'Mapped woodland')+(p.distance_km!==undefined?'<br>'+p.distance_km+' km from search centre':''))}}).addTo(map);
+const paths=L.geoJSON(null,{style:{color:'#8a673d',weight:2,opacity:.9}}).addTo(map);
+const pins=L.layerGroup().addTo(map);
+let start=null,end=null,startMark=null,endMark=null,routeLayer=null,gpsMarker=null,gpsCircle=null,lastGPS=null,loadTimer=null;
+function safe(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function mark(ll,label){return L.marker(ll).addTo(map).bindPopup(label)}
+function setStart(ll){start=ll;if(startMark)map.removeLayer(startMark);startMark=mark(ll,'Route start');startMark.openPopup();status('Start set. Tap the map to choose the destination.')}
+function setEnd(ll){end=ll;if(endMark)map.removeLayer(endMark);endMark=mark(ll,'Destination');endMark.openPopup();status('Start and destination set. Tap Plan walking route.')}
+map.on('click',e=>{if(!start||end){if(end&&start){end=null;if(endMark)map.removeLayer(endMark);endMark=null}setStart(e.latlng)}else setEnd(e.latlng)});
+async function jsonFetch(url,opts={},ms=18000){const ctl=new AbortController(),t=setTimeout(()=>ctl.abort(),ms);try{const r=await fetch(url,{...opts,signal:ctl.signal});if(!r.ok)throw Error('HTTP '+r.status);return await r.json()}finally{clearTimeout(t)}}
+async function findPlace(){const q=$('place').value.trim();if(!q){status('Type a place name first.');return}status('Searching for '+q+'…');try{const a=await jsonFetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q='+encodeURIComponent(q),{headers:{Accept:'application/json'}},15000);if(!a.length)throw Error('No match found. Try a more specific name.');const ll=L.latLng(+a[0].lat,+a[0].lon);map.setView(ll,15);L.marker(ll).addTo(pins).bindPopup(safe(a[0].display_name)).openPopup();status('Found '+a[0].display_name+'. Loading nearby woods…');loadWoods(ll,Number($('radius').value));}catch(e){status('Place search failed: '+e.message+'. If this is a browser CORS restriction, try GPS or tap the map.')} }
+$('find').onclick=findPlace;$('place').addEventListener('keydown',e=>{if(e.key==='Enter')findPlace()});
+async function gps(){if(!navigator.geolocation){status('GPS is unavailable in this browser. Open the HTTPS link in your browser.');return}status('Waiting for GPS permission and location…');navigator.geolocation.getCurrentPosition(p=>{lastGPS=L.latLng(p.coords.latitude,p.coords.longitude);if(gpsMarker)map.removeLayer(gpsMarker);gpsMarker=L.circleMarker(lastGPS,{radius:9,color:'#fff',weight:3,fillColor:'#1675e8',fillOpacity:1}).addTo(map).bindPopup('Your GPS position');if(gpsCircle)map.removeLayer(gpsCircle);gpsCircle=L.circle(lastGPS,{radius:p.coords.accuracy,color:'#1675e8',weight:1,fillOpacity:.08}).addTo(map);map.setView(lastGPS,15);setStart(lastGPS);status('GPS acquired (accuracy ±'+Math.round(p.coords.accuracy)+' m). Tap a destination, then Plan walking route.')},e=>status('GPS failed: '+({1:'Location permission denied.',2:'Location unavailable; try outdoors.',3:'GPS timed out; try again.'}[e.code]||e.message)),{enableHighAccuracy:true,timeout:25000,maximumAge:0})}
+$('gps').onclick=gps;$('nearby').onclick=()=>{if(!lastGPS){gps();status('Allow GPS; when location is acquired, tap Woods near me again.');return}loadWoods(lastGPS,Number($('radius').value))};
+async function loadWoods(center,radius){status('Searching for woodland within '+radius+' km…');let fc=null,features=[],errors=[];
+const south=center.lat-radius/110.8, north=center.lat+radius/110.8, cos=Math.max(.2,Math.cos(center.lat*Math.PI/180)),west=center.lng-radius/(110.8*cos),east=center.lng+radius/(110.8*cos);
+try{const q='[out:json][timeout:20];(way[landuse=forest]('+south+','+west+','+north+','+east+');way[natural=wood]('+south+','+west+','+north+','+east+');relation[landuse=forest]('+south+','+west+','+north+','+east+');relation[natural=wood]('+south+','+west+','+north+','+east+');way[highway~"path|footway|track|bridleway|steps"]('+south+','+west+','+north+','+east+'););out center geom tags;';
+let raw;for(const host of ['https://overpass.kumi.systems/api/interpreter','https://overpass-api.de/api/interpreter']){try{raw=await jsonFetch(host,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:'data='+encodeURIComponent(q)},25000);break}catch(e){errors.push(e.message)}}if(!raw)throw Error('OpenStreetMap query failed: '+errors.join(', '));
+for(const el of raw.elements||[]){const t=el.tags||{},isWood=t.landuse==='forest'||t.natural==='wood';let geom=null;if(el.type==='way'&&el.geometry?.length){const coords=el.geometry.filter(p=>Number.isFinite(p.lon)&&Number.isFinite(p.lat)).map(p=>[p.lon,p.lat]);if(isWood&&coords.length>=4&&coords[0][0]===coords.at(-1)[0]&&coords[0][1]===coords.at(-1)[1])geom={type:'Polygon',coordinates:[coords]};else if(!isWood&&coords.length>1){geom={type:'LineString',coordinates:coords};paths.addData({type:'Feature',geometry:geom,properties:{name:t.name||t.highway||'Footpath'}});continue}}if(!geom&&el.center)geom={type:'Point',coordinates:[el.center.lon,el.center.lat]};if(!geom)continue;const ll=geom.type==='Point'?L.latLng(geom.coordinates[1],geom.coordinates[0]):L.geoJSON({type:'Feature',geometry:geom,properties:{}}).getBounds().getCenter();const dist=ll.distanceTo(center)/1000;if(dist>radius+1)continue;features.push({type:'Feature',geometry:geom,properties:{name:t.name||'Unnamed woodland',source:'OpenStreetMap',distance_km:dist.toFixed(2)}})}
+}catch(e){errors.push(e.message)}
+// Query official England ancient woodland inventory when available.
+try{const params=new URLSearchParams({where:'1=1',geometry:JSON.stringify({xmin:west,ymin:south,xmax:east,ymax:north,spatialReference:{wkid:4326}}),geometryType:'esriGeometryEnvelope',inSR:'4326',spatialRel:'esriSpatialRelIntersects',outFields:'*',returnGeometry:'true',outSR:'4326',f:'geojson',resultRecordCount:'500'});const a=await jsonFetch('https://services.arcgis.com/JJzESW51TqeY9uat/arcgis/rest/services/Ancient_Woodland_England/FeatureServer/0/query?'+params,{},20000);for(const f of a.features||[]){if(!f.geometry)continue;f.properties=f.properties||{};f.properties.name=f.properties.NAME||f.properties.Name||'Ancient woodland';f.properties.source='Ancient Woodland Inventory';features.push(f)}}catch(e){errors.push('Ancient woodland layer: '+e.message)}
+woods.clearLayers();paths.clearLayers();pins.clearLayers();woods.addData({type:'FeatureCollection',features});if(!features.length){status('No woodland features returned for this area. '+(errors.length?'Sources: '+errors.join(' | '):'Try a larger radius or another location.'));return}
+const pts=[];for(const f of features){try{const ll=f.geometry.type==='Point'?L.latLng(f.geometry.coordinates[1],f.geometry.coordinates[0]):L.geoJSON(f).getBounds().getCenter();const name=f.properties?.name||'Woodland';const icon=L.divIcon({className:'woodpin',html:'<div style="font-size:24px;line-height:28px;text-shadow:0 1px 3px white">📍</div>',iconSize:[28,30],iconAnchor:[14,28]});pins.addLayer(L.marker(ll,{icon,title:name}).bindPopup('<b>'+safe(name)+'</b><br>'+safe(f.properties?.source||'Woodland')+(f.properties?.distance_km?'<br>'+f.properties.distance_km+' km from centre':'')));pts.push(ll)}catch(e){}}
+if(pts.length)map.fitBounds(L.latLngBounds(pts).pad(.15),{maxZoom:14});status('Found '+features.length+' woodland features; displayed '+pins.getLayers().length+' pins. Footpaths are shown in brown where the data service returned them.'+(errors.length?'\nSome sources unavailable: '+errors.join(' | '):''))}
+async function planRoute(){if(!start||!end){status('Set a start and destination first. Use GPS for start or tap the map twice.');return}status('Requesting a pedestrian route from Valhalla…');let geo=null,dist=null,duration=null,provider='';
+try{const payload={locations:[{lat:start.lat,lon:start.lng},{lat:end.lat,lon:end.lng}],costing:'pedestrian',units:'kilometers',shape_format:'geojson',costing_options:{pedestrian:{use_tracks:1.0,use_trails:1.0,use_living_streets:0.1}}};const d=await jsonFetch('/api/route',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)},35000);geo=d.geometry;dist=d.distance_km;duration=d.duration_min;provider=d.provider||'Valhalla'}catch(e){status('Valhalla proxy unavailable; trying BRouter trekking profile…');try{const url='https://brouter.de/brouter?lonlats='+encodeURIComponent(start.lng+','+start.lat+'|'+end.lng+','+end.lat)+'&profile=trekking&alternativeidx=0&format=geojson';const d=await jsonFetch(url,{headers:{Accept:'application/geo+json,application/json'}},35000);geo=d.features?.[0]?.geometry;if(!geo)throw Error('No route geometry');let metres=0;for(let i=1;i<geo.coordinates.length;i++)metres+=map.distance([geo.coordinates[i-1][1],geo.coordinates[i-1][0]],[geo.coordinates[i][1],geo.coordinates[i][0]]);dist=metres/1000;duration=dist/4.5*60;provider='BRouter trekking'}catch(e2){status('Route failed. Valhalla: '+e.message+'; BRouter: '+e2.message+'. Try again or choose closer points.');return}}
+if(routeLayer)map.removeLayer(routeLayer);routeLayer=L.geoJSON(geo,{style:{color:'#1769c2',weight:5,opacity:.95}}).addTo(map);map.fitBounds(routeLayer.getBounds().pad(.12));status('Route calculated by '+provider+'\nDistance: '+Number(dist).toFixed(2)+' km · estimated walking time: '+Math.round(duration)+' min.\nTrail preference applied where supported; check crossings, access rights and conditions.')}
+$('route').onclick=planRoute;$('reset').onclick=()=>{start=end=null;[startMark,endMark,routeLayer].forEach(x=>{if(x)map.removeLayer(x)});startMark=endMark=routeLayer=null;status('Route cleared. Tap map twice to choose new endpoints.')};
+async function initial(){status('Loading map and nearby woodland…');try{await loadWoods(map.getCenter(),5)}catch(e){status('Map is ready. Tap Woods near me or search a place to load woodland.')}}initial();
+})();
 </script></body></html>"""
 
-def fetch_json(url,data=None,headers=None,timeout=30):
-    req=urllib.request.Request(url,data=data,headers=headers or {},method="POST" if data is not None else "GET")
-    with urllib.request.urlopen(req,timeout=timeout) as r:return json.loads(r.read().decode())
+def fetch_json(url, data=None, timeout=25, headers=None):
+    h={"User-Agent":"WoodsRoutePlanner/2.0 (walking route planner)","Accept":"application/json"}
+    if headers:h.update(headers)
+    req=urllib.request.Request(url,data=data,headers=h,method="POST" if data is not None else "GET")
+    with urllib.request.urlopen(req,timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
 
-def fetch_overpass(query,timeout=40):
-    payload=urllib.parse.urlencode({"data":query}).encode()
-    headers={"Content-Type":"application/x-www-form-urlencoded","User-Agent":"WoodsRoutePlanner/1.0"}
-    errors=[]
-    for endpoint in OVERPASS_SERVERS:
-        try:
-            return fetch_json(endpoint,data=payload,headers=headers,timeout=timeout)
-        except Exception as exc:
-            errors.append(str(exc))
-    raise RuntimeError("All woodland query servers failed: "+"; ".join(errors))
-def osm_geometry(el):
-    tags=el.get("tags",{})
-    if el["type"]=="way":
-        coords=[[n["lon"],n["lat"]] for n in el.get("geometry",[]) if "lon" in n and "lat" in n]
-        if len(coords)<2:return None
-        if (tags.get("natural")=="wood" or tags.get("landuse")=="forest") and len(coords)>=4 and coords[0]==coords[-1]:return {"type":"Polygon","coordinates":[coords]}
-        return {"type":"LineString","coordinates":coords}
-    return None
-def feature(el):
-    geom=osm_geometry(el)
-    if not geom:return None
-    return {"type":"Feature","geometry":geom,"properties":{"name":el.get("tags",{}).get("name"),"type":el.get("tags",{}).get("natural") or el.get("tags",{}).get("landuse") or "woodland"}}
 class Handler(BaseHTTPRequestHandler):
-    def send_json(self,code,obj):
-        body=json.dumps(obj).encode();self.send_response(code);self.send_header("Content-Type","application/json; charset=utf-8");self.send_header("Cache-Control","no-store");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
+    def send_bytes(self, code, body, content_type):
+        self.send_response(code);self.send_header("Content-Type",content_type);self.send_header("Cache-Control","no-store");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
+    def send_json(self, code, obj):
+        self.send_bytes(code,json.dumps(obj).encode("utf-8"),"application/json; charset=utf-8")
+    def do_HEAD(self):
+        if self.path=="/":
+            self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8");self.end_headers()
+        else:self.send_response(404);self.end_headers()
     def do_GET(self):
         path=urllib.parse.urlparse(self.path).path
-        if path=="/":
-            b=HTML.encode();self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8");self.send_header("Cache-Control","no-store, no-cache, must-revalidate");self.send_header("Pragma","no-cache");self.send_header("Content-Length",str(len(b)));self.end_headers();self.wfile.write(b);return
-        if path=="/health":return self.send_json(200,{"status":"ok","os_maps_api_key_configured":bool(OS_MAPS_API_KEY)})
-        m=TILE_RE.match(path)
-        if m:
-            style,zs,xs,ys=m.groups();z,x,y=map(int,(zs,xs,ys))
-            if z>18 or x>=(1<<z) or y>=(1<<z):return self.send_json(400,{"error":"Invalid tile coordinates"})
-            if not OS_MAPS_API_KEY:return self.send_json(503,{"error":"OS Maps API key is not configured"})
-            url=f"https://api.os.uk/maps/raster/v1/zxy/{style}_3857/{z}/{x}/{y}.png?key={urllib.parse.quote(OS_MAPS_API_KEY)}"
-            try:
-                req=urllib.request.Request(url,headers={"User-Agent":"WoodsRoutePlanner/1.0"})
-                with urllib.request.urlopen(req,timeout=15) as up:data=up.read()
-                self.send_response(200);self.send_header("Content-Type","image/png");self.send_header("Cache-Control","public, max-age=86400");self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data)
-            except urllib.error.HTTPError as e:self.send_json(502,{"error":f"OS Maps tile request failed (HTTP {e.code})"})
-            except Exception:self.send_json(502,{"error":"OS Maps tile service unavailable"})
-            return
-        q=urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        if path=="/":return self.send_bytes(200,HTML.encode("utf-8"),"text/html; charset=utf-8")
+        if path=="/health":return self.send_json(200,{"status":"ok","app":"Woods Route Planner v2"})
         if path=="/api/search":
-            term=q.get("q",[""])[0].strip()
-            if not term:return self.send_json(400,{"error":"Enter a place name"})
+            q=urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("q",[""])[0].strip()
+            if not q:return self.send_json(400,{"error":"Enter a place name"})
             try:
-                data=fetch_json("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q="+urllib.parse.quote(term),headers={"User-Agent":"WoodsRoutePlanner/1.0"})
-                if not data:return self.send_json(404,{"error":"No matching place found"})
-                return self.send_json(200,{"lat":float(data[0]["lat"]),"lon":float(data[0]["lon"]),"name":data[0]["display_name"]})
-            except Exception:return self.send_json(502,{"error":"Place search temporarily unavailable"})
-        if path=="/api/nearby-woods":
-            try:
-                lat=float(q.get("lat",[""])[0]);lon=float(q.get("lon",[""])[0]);radius=float(q.get("radius",["5"])[0])
-                if not (-90<=lat<=90 and -180<=lon<=180) or not (1<=radius<=50):return self.send_json(400,{"error":"Invalid location or radius (1–50 km)."})
-                import math
-                dlat=radius/111.0;dlon=radius/(111.0*max(0.15,abs(math.cos(math.radians(lat)))))
-                south,west,north,east=lat-dlat,lon-dlon,lat+dlat,lon+dlon
-                query=f"""[out:json][timeout:40];(way[landuse=forest]({south},{west},{north},{east});way[natural=wood]({south},{west},{north},{east});relation[landuse=forest]({south},{west},{north},{east});relation[natural=wood]({south},{west},{north},{east}););out center geom;"""
-                features=[];seen=set();overpass_failed=False
-                try:
-                    raw=fetch_overpass(query,timeout=25)
-                except Exception as ex:
-                    print("Nearby OSM woodland query failed; continuing with official inventories: %s"%ex,flush=True)
-                    raw={"elements":[]};overpass_failed=True
-                def add_feature(geom,props,source):
-                    coords=[]
-                    def visit(v):
-                        if isinstance(v,(list,tuple)):
-                            if len(v)>=2 and isinstance(v[0],(int,float)) and isinstance(v[1],(int,float)):
-                                coords.append((float(v[0]),float(v[1])))
-                            else:
-                                for item in v:visit(item)
-                    visit(geom.get("coordinates",[]))
-                    if not coords:return
-                    clon=sum(p[0] for p in coords)/len(coords);clat=sum(p[1] for p in coords)/len(coords)
-                    dist=2*6371*math.asin(min(1,math.sqrt(math.sin(math.radians(clat-lat)/2)**2+math.cos(math.radians(lat))*math.cos(math.radians(clat))*math.sin(math.radians(clon-lon)/2)**2)))
-                    # Polygon centroids can fall outside the search radius even when woodland touches it.
-                    # Keep polygons returned by the intersecting bounding-box query; filter point pins by radius.
-                    if geom.get("type")=="Point" and dist>radius:return
-                    props=dict(props or {});props["source"]=source;props["distance_km"]=round(dist,2)
-                    features.append({"type":"Feature","geometry":geom,"properties":props})
-                for el in raw.get("elements",[]):
-                    key=("osm",el.get("type"),el.get("id"))
-                    if key in seen:continue
-                    seen.add(key);tags=el.get("tags",{});geom=None
-                    if el.get("type")=="way":
-                        coords=[[p["lon"],p["lat"]] for p in el.get("geometry",[]) if "lon" in p and "lat" in p]
-                        if len(coords)>=4 and coords[0]==coords[-1]:geom={"type":"Polygon","coordinates":[coords]}
-                    elif el.get("type")=="relation":
-                        rings=[]
-                        for member in el.get("members",[]):
-                            if member.get("role")!="outer" or member.get("type")!="way":continue
-                            ring=[[p["lon"],p["lat"]] for p in member.get("geometry",[]) if "lon" in p and "lat" in p]
-                            if len(ring)>=4 and ring[0]==ring[-1]:rings.append(ring)
-                        if rings:geom={"type":"Polygon","coordinates":rings}
-                    if geom is None and el.get("center"):geom={"type":"Point","coordinates":[el["center"]["lon"],el["center"]["lat"]]}
-                    if geom is None:continue
-                    add_feature(geom,{"osm_type":el.get("type"),"osm_id":el.get("id"),"name":tags.get("name","Unnamed woodland"),"kind":tags.get("natural") or tags.get("landuse") or "woodland"},"OpenStreetMap")
-                # Official inventories fill gaps in OSM. Query only the selected bounding box to keep responses bounded.
-                envelope=urllib.parse.quote(json.dumps({"xmin":west,"ymin":south,"xmax":east,"ymax":north,"spatialReference":{"wkid":4326}},separators=(",",":")))
-                arcgis_sources=[
-                    ("National Forest Inventory","https://services2.arcgis.com/mHXjwgl3OARRqqD4/ArcGIS/rest/services/National_Forest_Inventory_GB_2024/FeatureServer/0/query"),
-                    ("Ancient Woodland","https://services.arcgis.com/JJzESW51TqeY9uat/arcgis/rest/services/Ancient_Woodland_England/FeatureServer/0/query")
-                ]
-                official_errors=[]
-                for source,url in arcgis_sources:
-                    params=urllib.parse.urlencode({"where":"1=1","geometry":json.dumps({"xmin":west,"ymin":south,"xmax":east,"ymax":north,"spatialReference":{"wkid":4326}},separators=(",",":")),"geometryType":"esriGeometryEnvelope","inSR":"4326","spatialRel":"esriSpatialRelIntersects","outFields":"*","returnGeometry":"true","outSR":"4326","f":"geojson","resultRecordCount":"1000"})
-                    try:
-                        official=fetch_json(url+"?"+params,headers={"User-Agent":"WoodsRoutePlanner/1.0"},timeout=35)
-                        if official.get("error"):raise ValueError(official["error"].get("message","ArcGIS query error"))
-                        for feature in official.get("features",[]):
-                            props=feature.get("properties",{})
-                            if source=="National Forest Inventory":
-                                props["name"]=props.get("CATEGORY") or "Woodland (National Forest Inventory)"
-                                props["kind"]=props.get("CATEGORY") or "National Forest Inventory"
-                            else:
-                                props["name"]=props.get("NAME") or props.get("Name") or "Ancient woodland"
-                                props["kind"]="Ancient woodland"
-                            add_feature(feature.get("geometry") or {},props,source)
-                    except Exception as ex:
-                        print("Official woodland source %s failed: %s"%(source,ex),flush=True)
-                        official_errors.append(source)
-                sources=([] if overpass_failed else ["OpenStreetMap"])+[x for x in ["National Forest Inventory","Ancient Woodland"] if x not in official_errors]
-                partial_sources=(["OpenStreetMap"] if overpass_failed else [])+official_errors
-                return self.send_json(200,{"woods":{"type":"FeatureCollection","features":features},"count":len(features),"radius_km":radius,"sources":sources,"partial_sources":partial_sources})
-            except Exception as exc:
-                print("Nearby woodland search error: %s" % exc,flush=True)
-                return self.send_json(502,{"error":"Woodland search failed. Try again in a moment."})
-        if path=="/api/woods":
-            try:
-                s,w,n,e=map(float,q.get("bbox",[""])[0].split(","))
-                if n-s>.20 or e-w>.20:return self.send_json(400,{"error":"Zoom in closer to load woodland data"})
-                query=f"""[out:json][timeout:25];(way[landuse=forest]({s},{w},{n},{e});way[natural=wood]({s},{w},{n},{e});way[highway~"path|footway|track|bridleway|steps"]({s},{w},{n},{e}););out geom;"""
-                raw=fetch_overpass(query,timeout=35);woods=[];trails=[]
-                for el in raw.get("elements",[]):
-                    f=feature(el)
-                    if not f:continue
-                    if f["geometry"]["type"]=="Polygon":woods.append(f)
-                    else:trails.append(f)
-                return self.send_json(200,{"woods":{"type":"FeatureCollection","features":woods},"trails":{"type":"FeatureCollection","features":trails},"woodland_count":len(woods),"trail_count":len(trails)})
-            except Exception:return self.send_json(502,{"error":"OpenStreetMap woodland service is busy or unavailable"})
+                rows=fetch_json("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q="+urllib.parse.quote(q),timeout=15)
+                if not rows:return self.send_json(404,{"error":"No matching place found"})
+                return self.send_json(200,{"lat":float(rows[0]["lat"]),"lon":float(rows[0]["lon"]),"name":rows[0]["display_name"]})
+            except Exception as e:return self.send_json(502,{"error":"Geocoding failed: "+str(e)[:180]})
         return self.send_json(404,{"error":"Not found"})
     def do_POST(self):
         if urllib.parse.urlparse(self.path).path!="/api/route":return self.send_json(404,{"error":"Not found"})
         try:
-            body=json.loads(self.rfile.read(int(self.headers.get("Content-Length","0"))));a=body["start"];b=body["end"]
-            payload={"locations":[{"lat":float(a["lat"]),"lon":float(a["lng"])},{"lat":float(b["lat"]),"lon":float(b["lng"])}],"costing":"pedestrian","units":"kilometers","costing_options":{"pedestrian":{"use_tracks":1.0,"use_living_streets":0.0,"walking_speed":4.5}}}
-            req=urllib.request.Request(VALHALLA,data=json.dumps(payload).encode(),headers={"Content-Type":"application/json","User-Agent":"WoodsRoutePlanner/1.0","X-Client-Id":"woods-route-planner"},method="POST")
-            with urllib.request.urlopen(req,timeout=35) as up:data=json.loads(up.read().decode())
-            trip=data.get("trip",{})
-            if trip.get("status",0)!=0:return self.send_json(502,{"error":trip.get("status_message","No walking route found")})
-            shape=trip["legs"][0]["shape"];coords=[];i=0;lat=lon=0
-            while i<len(shape):
-                vals=[]
-                for _ in range(2):
-                    res=shift=0
-                    while True:
-                        c=ord(shape[i])-63;i+=1;res|=(c&31)<<shift;shift+=5
-                        if c<32:break
-                    vals.append(~(res>>1) if res&1 else res>>1)
-                lat+=vals[0];lon+=vals[1];coords.append([lon/1e6,lat/1e6])
-            summary=trip["summary"]
-            return self.send_json(200,{"geometry":{"type":"LineString","coordinates":coords},"distance_km":float(summary.get("length",0)),"duration_min":float(summary.get("time",0))/60,"note":"Trail preference applied; verify road crossings and access. Not guaranteed woodland-only."})
-        except urllib.error.HTTPError as e:return self.send_json(502,{"error":f"Routing provider returned HTTP {e.code}"})
-        except Exception:return self.send_json(502,{"error":"Could not calculate route; try different endpoints"})
-    def log_message(self,fmt,*args):print("%s - %s"%(self.address_string(),fmt%args),flush=True)
+            payload=json.loads(self.rfile.read(int(self.headers.get("Content-Length","0"))))
+            loc=payload.get("locations",[])
+            if len(loc)!=2:raise ValueError("Two route endpoints are required")
+            for p in loc:
+                if not (-90<=float(p["lat"])<=90 and -180<=float(p["lon"])<=180):raise ValueError("Invalid coordinates")
+            payload["costing"]="pedestrian";payload["units"]="kilometers";payload["shape_format"]="geojson"
+            result=fetch_json(VALHALLA_URL,data=json.dumps(payload).encode(),timeout=35,headers={"Content-Type":"application/json"})
+            trip=result.get("trip",{})
+            if trip.get("status",0)!=0:raise RuntimeError(trip.get("status_message","Valhalla found no route"))
+            legs=trip.get("legs",[])
+            if not legs:raise RuntimeError("Valhalla returned no route legs")
+            shape=legs[0].get("shape")
+            if isinstance(shape,dict):geometry=shape
+            else:
+                # Valhalla encoded polyline precision 6.
+                coords=[];i=0;lat=lon=0
+                while i<len(shape):
+                    vals=[]
+                    for _ in range(2):
+                        value=shift=0
+                        while True:
+                            b=ord(shape[i])-63;i+=1;value|=(b&31)<<shift;shift+=5
+                            if b<32:break
+                        vals.append(~(value>>1) if value&1 else value>>1)
+                    lat+=vals[0];lon+=vals[1];coords.append([lon/1e6,lat/1e6])
+                geometry={"type":"LineString","coordinates":coords}
+            summary=trip.get("summary",{})
+            return self.send_json(200,{"geometry":geometry,"distance_km":float(summary.get("length",0)),"duration_min":float(summary.get("time",0))/60,"provider":"Valhalla","note":"Pedestrian routing; verify access and conditions."})
+        except urllib.error.HTTPError as e:return self.send_json(502,{"error":"Valhalla HTTP "+str(e.code)})
+        except Exception as e:return self.send_json(502,{"error":str(e)[:240] or "Could not calculate route"})
+    def log_message(self, fmt, *args):print("%s - %s"%(self.address_string(),fmt%args),flush=True)
+
 if __name__=="__main__":ThreadingHTTPServer(("0.0.0.0",PORT),Handler).serve_forever()
