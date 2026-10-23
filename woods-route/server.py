@@ -21,7 +21,7 @@ HTML=r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="
 </style></head><body><header><h1>🌲 Woods Route Planner</h1><p>Woodland map, trail-priority routes and live phone GPS.</p></header><main><aside>
 <p class="note">Tap the map to set start and destination. Turn on live GPS to show your current position as you move.</p>
 <label for="search">Find a place or woodland</label><input id="search" placeholder="e.g. Ashridge Estate, Hertfordshire"><button id="find" class="secondary">Find place</button>
-<p class="note">Map background: OpenStreetMap</p>
+<p class="note">Map background: OpenStreetMap · mapped woodland highlighted red</p>
 <button id="gps">Show my location (live GPS)</button><button id="stopgps" class="secondary">Stop live GPS</button>
 <label for="radius">Search radius around my location</label><select id="radius"><option value="2">2 km</option><option value="5" selected>5 km</option><option value="10">10 km</option><option value="20">20 km</option><option value="30">30 km</option><option value="50">50 km</option></select><button id="nearwoods">Show woods within radius</button>
 <label>Route preference</label><select id="mode"><option value="trails">Prefer trails and tracks; minimise road use</option></select>
@@ -31,25 +31,7 @@ HTML=r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="
 document.getElementById('map').innerHTML='';if(!window.L){document.getElementById('status').textContent='Map library failed to load.';throw new Error('Leaflet failed')}
 const map=L.map('map').setView([51.815,-0.42],12);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap contributors',maxZoom:19}).addTo(map);
-const redWoodlands=L.geoJSON(null,{style:{color:'#b51224',weight:1.8,fillColor:'#e32636',fillOpacity:0.72},onEachFeature:(f,l)=>l.bindTooltip(f.properties?.name||'Woodland')}).addTo(map);
-let lastWoodQuery='',woodQueryBusy=false,woodRequestId=0;
-async function loadRedWoodlands(){
- if(map.getZoom()<9||woodQueryBusy)return;
- const bb=map.getBounds(),s=bb.getSouth().toFixed(4),w=bb.getWest().toFixed(4),n=bb.getNorth().toFixed(4),e=bb.getEast().toFixed(4),key=[s,w,n,e].join(',');
- if(key===lastWoodQuery)return;
- woodQueryBusy=true;const requestId=++woodRequestId;
- try{
-  status('Loading mapped woodland outlines…');
-  const r=await fetch('/api/woodlands?bbox='+encodeURIComponent(key),{cache:'no-store'});
-  const data=await r.json();if(!r.ok)throw Error(data.error||('HTTP '+r.status));
-  if(requestId!==woodRequestId)return;
-  redWoodlands.clearLayers();redWoodlands.addData(data);lastWoodQuery=key;
-  status('Red woodland areas loaded: '+(data.count??data.features?.length??0)+'.');
- }catch(err){if(requestId===woodRequestId){console.error('Woodland loading failed:',err);status('Woodland highlighting unavailable: '+err.message+'. Pan or zoom to retry.');}}
- finally{if(requestId===woodRequestId){woodQueryBusy=false;const now=map.getBounds(),nowKey=[now.getSouth().toFixed(4),now.getWest().toFixed(4),now.getNorth().toFixed(4),now.getEast().toFixed(4)].join(',');if(nowKey!==key){lastWoodQuery='';loadRedWoodlands()}}}
-}
-map.on('moveend',()=>{lastWoodQuery='';loadRedWoodlands()});loadRedWoodlands();
-const woods=L.geoJSON(null,{style:{color:'#e32636',weight:2.8,fillColor:'#e32636',fillOpacity:.30},onEachFeature:(f,l)=>l.bindTooltip(f.properties?.name||'Woodland')}).addTo(map);
+const woods=L.geoJSON(null,{style:{color:'#b51224',weight:2.8,fillColor:'#e32636',fillOpacity:.78},onEachFeature:(f,l)=>l.bindTooltip(f.properties?.name||'Woodland')}).addTo(map);
 const trails=L.geoJSON(null,{style:{color:'#8b6b42',weight:2,opacity:.9}}).addTo(map);
 let start=null,end=null,startMarker=null,endMarker=null,routeLine=null,gpsWatch=null,positionMarker=null,accuracyCircle=null,nearbyWoodsLayer=null,nearbyCircle=null,currentGPS=null;
 const status=t=>document.getElementById('status').textContent=t;
@@ -123,24 +105,6 @@ class Handler(BaseHTTPRequestHandler):
                 if not data:return self.send_json(404,{"error":"No matching place found"})
                 return self.send_json(200,{"lat":float(data[0]["lat"]),"lon":float(data[0]["lon"]),"name":data[0]["display_name"]})
             except Exception:return self.send_json(502,{"error":"Place search temporarily unavailable"})
-        if path=="/api/woodlands":
-            try:
-                vals=q.get("bbox",[""])[0].split(",")
-                if len(vals)!=4: return self.send_json(400,{"error":"bbox must be south,west,north,east"})
-                south,west,north,east=map(float,vals)
-                if not (-90<=south<north<=90 and -180<=west<east<=180): return self.send_json(400,{"error":"Invalid map bounds"})
-                if (north-south)*(east-west)>4.0: return self.send_json(400,{"error":"Zoom in to a smaller area to load woodland outlines"})
-                query=f"""[out:json][timeout:25];(way["natural"="wood"]({south},{west},{north},{east});way["landuse"="forest"]({south},{west},{north},{east}););out geom;"""
-                raw=fetch_overpass(query,timeout=30)
-                features=[]
-                for el in raw.get("elements",[]):
-                    if el.get("type")!="way": continue
-                    ft=feature(el)
-                    if ft and ft.get("geometry",{}).get("type")=="Polygon": features.append(ft)
-                return self.send_json(200,{"type":"FeatureCollection","features":features,"count":len(features)})
-            except Exception as exc:
-                print("Woodland viewport query failed: "+str(exc),flush=True)
-                return self.send_json(502,{"error":"Woodland data providers are temporarily unavailable"})
         if path=="/api/nearby-woods":
             try:
                 lat=float(q.get("lat",[""])[0]);lon=float(q.get("lon",[""])[0]);radius=float(q.get("radius",["5"])[0])
