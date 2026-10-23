@@ -2,12 +2,16 @@
 import os, json, math, sqlite3, time, threading, hmac
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 from pathlib import Path
 
 HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "8765"))
 API_KEY = os.getenv("API_KEY", "").strip()
 DB_PATH = os.getenv("DB_PATH", str(Path(__file__).with_name("toolkit.sqlite3")))
+OS_MAPS_API_KEY = os.getenv("OS_MAPS_API_KEY", "").strip()
+OS_STYLES = {"Leisure", "Outdoor", "Road", "Light"}
 MAX_BODY = 1_000_000
 RATE_LIMIT = max(1, int(os.getenv("RATE_LIMIT_PER_MINUTE", "60")))
 hits, hits_lock = {}, threading.Lock()
@@ -32,6 +36,25 @@ def number(d, k, minimum=None):
     if not math.isfinite(v) or (minimum is not None and v < minimum):
         raise ValueError(k + " is outside the allowed range")
     return v
+
+def parse_os_tile_path(path):
+    parts = path.strip("/").split("/")
+    if len(parts) != 7 or parts[:3] != ["api", "maps", "os"]:
+        raise ValueError("Invalid OS tile path")
+    style = parts[3]
+    if style not in OS_STYLES:
+        raise ValueError("Unsupported OS map style")
+    try:
+        z, x = int(parts[4]), int(parts[5])
+        ypart = parts[6]
+        if not ypart.endswith(".png"): raise ValueError()
+        y = int(ypart[:-4])
+    except (ValueError, IndexError):
+        raise ValueError("Invalid tile coordinates")
+    if z < 0 or z > 18 or x < 0 or y < 0 or x >= 2**z or y >= 2**z:
+        raise ValueError("Tile coordinates outside allowed range")
+    return style, z, x, y
+
 
 def calculate(path, d):
     if path == "/api/calculate/battery-energy":
@@ -78,8 +101,10 @@ def calculate(path, d):
         return {"circumference_mm":math.pi*diameter,"circumference_m":math.pi*diameter/1000}
     raise KeyError(path)
 
+MAPS_HTML = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>Research Toolkit — OS Maps</title>\n<link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\">\n<style>\n:root{color-scheme:light dark}body{font:16px system-ui;margin:0}header{padding:12px 16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}input,select,button{font:inherit;padding:8px;border-radius:6px}#map{height:calc(100dvh - 120px);min-height:360px}.note{padding:0 16px 10px;font-size:13px;opacity:.8}#status{font-size:13px}\n</style></head><body>\n<header><strong>OS Maps</strong>\n<label>Toolkit API key <input id=\"token\" type=\"password\" autocomplete=\"off\" placeholder=\"Bearer token\" size=\"18\"></label>\n<label>Style <select id=\"style\"><option>Leisure</option><option>Outdoor</option><option>Road</option><option>Light</option></select></label>\n<button id=\"load\">Load map</button><span id=\"status\">Enter your toolkit API key to load OS tiles.</span></header>\n<div class=\"note\">Map tiles are requested through the toolkit server; the OS Maps API key stays server-side. OS map data and attribution are subject to Ordnance Survey terms.</div>\n<div id=\"map\" aria-label=\"Interactive Ordnance Survey map\"></div>\n<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>\n<script>\nconst map=L.map('map').setView([52.0,-1.5],7);\nlet layer=null, activeUrls=new Set();\nfunction status(t){document.getElementById('status').textContent=t}\nfunction makeLayer(style,token){return L.gridLayer({tileSize:256,updateWhenIdle:true,keepBuffer:2}).on('tileerror',()=>status('Tile request failed. Check toolkit key, OS_MAPS_API_KEY, and OS Data Hub access.')).addTo(map);}\ndocument.getElementById('load').addEventListener('click',()=>{\n const token=document.getElementById('token').value.trim(),style=document.getElementById('style').value;\n if(!token){status('Enter the toolkit API key first.');return}\n if(layer){map.removeLayer(layer);layer=null}\n layer=L.gridLayer({tileSize:256,keepBuffer:2});\n layer.createTile=function(coords,done){\n  const tile=document.createElement('img');tile.alt='OS map tile';tile.setAttribute('role','presentation');\n  const url='/api/maps/os/'+encodeURIComponent(style)+'/'+coords.z+'/'+coords.x+'/'+coords.y+'.png';\n  fetch(url,{headers:{Authorization:'Bearer '+token}}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.blob()}).then(blob=>{\n   const objectUrl=URL.createObjectURL(blob);activeUrls.add(objectUrl);tile.onload=()=>{URL.revokeObjectURL(objectUrl);activeUrls.delete(objectUrl);done(null,tile)};tile.onerror=()=>{URL.revokeObjectURL(objectUrl);activeUrls.delete(objectUrl);done(new Error('image decode failed'),tile)};tile.src=objectUrl;\n  }).catch(err=>{status('Tile error: '+err.message+'. Check OS Maps API key configured on server.');done(err,tile)});\n  return tile;\n };\n layer.addTo(map);status('Loading OS '+style+' map…');\n});\n</script></body></html>"
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ResearchEngineeringToolkit/3.2"
+    server_version = "ResearchEngineeringToolkit/3.3"
     def reply(self, status, obj):
         raw=json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(status); self.send_header("Content-Type","application/json; charset=utf-8")
@@ -95,11 +120,14 @@ class Handler(BaseHTTPRequestHandler):
         if not token or not hmac.compare_digest(token,API_KEY):
             self.reply(401,{"error":"Unauthorized"}); return False
         now=time.time(); ip=self.client_address[0]
+        route = urlparse(self.path).path
+        bucket = ip + (":tiles" if route.startswith("/api/maps/os/") else ":api")
+        limit = max(RATE_LIMIT, 600) if route.startswith("/api/maps/os/") else RATE_LIMIT
         with hits_lock:
-            recent=[t for t in hits.get(ip,[]) if now-t<60]
-            if len(recent)>=RATE_LIMIT:
+            recent=[t for t in hits.get(bucket,[]) if now-t<60]
+            if len(recent)>=limit:
                 self.reply(429,{"error":"Rate limit exceeded"}); return False
-            recent.append(now); hits[ip]=recent
+            recent.append(now); hits[bucket]=recent
         return True
     def body(self):
         try: n=int(self.headers.get("Content-Length","0"))
@@ -108,13 +136,66 @@ class Handler(BaseHTTPRequestHandler):
         d=json.loads(self.rfile.read(n))
         if not isinstance(d,dict): raise ValueError("JSON body must be an object")
         return d
+    def os_tile(self, path):
+        try:
+            style, z, x, y = parse_os_tile_path(path)
+        except ValueError as e:
+            self.reply(400, {"error":str(e)})
+            return True
+        if not OS_MAPS_API_KEY:
+            self.reply(503, {"error":"OS_MAPS_API_KEY is not configured on the server"})
+            return True
+        style = parts[3]
+        if style not in OS_STYLES:
+            self.reply(400, {"error":"Unsupported OS map style"})
+            return True
+        try:
+            z, x = int(parts[4]), int(parts[5])
+            ypart = parts[6]
+            if not ypart.endswith(".png"): raise ValueError()
+            y = int(ypart[:-4])
+            if z < 0 or z > 18 or x < 0 or y < 0 or x >= 2**z or y >= 2**z:
+                raise ValueError()
+        except (ValueError, IndexError):
+            self.reply(400, {"error":"Invalid tile coordinates"})
+            return True
+        url = f"https://api.os.uk/maps/raster/v1/zxy/{style}_3857/{z}/{x}/{y}.png?key={OS_MAPS_API_KEY}"
+        try:
+            req = Request(url, headers={"User-Agent":"ResearchEngineeringToolkit/3.3"})
+            with urlopen(req, timeout=10) as response:
+                tile = response.read(2_000_000 + 1)
+                if len(tile) > 2_000_000:
+                    self.reply(502, {"error":"Upstream tile exceeded size limit"})
+                    return True
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(tile)))
+                self.send_header("Cache-Control", "private, max-age=300")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(tile)
+        except (HTTPError, URLError, TimeoutError, OSError):
+            self.reply(502, {"error":"OS Maps upstream request failed; check OS Data Hub key, plan and service availability"})
+        return True
+
     def do_GET(self):
         if not self.auth(): return
         p=urlparse(self.path).path
+        if p == "/maps":
+            raw = MAPS_HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+        if p.startswith("/api/maps/os/") and self.os_tile(p): return
         try:
             if p=="/health":
                 with db() as c: c.execute("SELECT 1")
-                return self.reply(200,{"status":"ok","version":"3.2","database":"connected"})
+                return self.reply(200,{"status":"ok","version":"3.3","database":"connected"})
             if p=="/api/evidence":
                 with db() as c: rows=c.execute("SELECT * FROM evidence ORDER BY id DESC LIMIT 500").fetchall()
                 return self.reply(200,{"items":[dict(x) for x in rows]})

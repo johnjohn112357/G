@@ -28,6 +28,15 @@ A lightweight Python HTTP API for engineering calculations and a persistent evid
 - `POST /api/calculate/gear-ratio`: `{"input_rpm":3000,"output_rpm":1000}`
 - `POST /api/calculate/wheel-circumference`: `{"wheel_diameter_mm":200}`
 
+
+## Ordnance Survey (OS) Maps integration
+- Open `/maps` while authenticated with the toolkit API key. The page uses Leaflet for display and requests tiles through the toolkit server.
+- Set `OS_MAPS_API_KEY` in Render's environment-variable settings to an API key from your OS Data Hub account. Do not put the OS key in the repository or in browser code.
+- The server proxies only the allow-listed OS raster styles `Leisure`, `Outdoor`, `Road`, and `Light` using the Web Mercator (`_3857`) tile service. Tile paths and zoom/coordinate bounds are validated.
+- The OS key is not returned to the browser. Toolkit API authentication is required for the map page and tile requests.
+- OS map tiles are not persistently cached by the toolkit. Do not scrape or bulk-download tiles. Confirm the OS Data Hub product terms, attribution requirements, API quota and intended use before relying on the integration.
+- Without `OS_MAPS_API_KEY`, the map viewer loads but tile requests return a clear configuration error.
+
 ## Development checks
 - Run locally: `python -m compileall -q .`
 - Run regression suite: `python -m unittest discover -s tests -v`
