@@ -1,0 +1,52 @@
+name: Woods Route Planner Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [woods-route-planner]
+    paths:
+      - "woods-route/server.py"
+      - "woods-route/windows/**"
+      - ".github/workflows/woods-route-windows.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build standalone executable
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          python -m py_compile woods-route/server.py
+          pyinstaller --noconfirm --clean --onefile --name WoodsRoutePlanner woods-route/server.py
+          Copy-Item woods-route/windows/launch.bat dist/launch.bat
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" woods-route/windows/WoodsRoutePlanner.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package portable build
+        shell: pwsh
+        run: Compress-Archive -Path dist/WoodsRoutePlanner.exe,dist/launch.bat -DestinationPath dist/WoodsRoutePlanner-Portable-Windows.zip -Force
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: WoodsRoutePlanner-Windows
+          path: |
+            dist/WoodsRoutePlanner-Setup.exe
+            dist/WoodsRoutePlanner-Portable-Windows.zip
+            dist/WoodsRoutePlanner.exe
+          if-no-files-found: error
+          retention-days: 30
