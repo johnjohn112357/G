@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parent
 PORT = int(os.environ.get("PORT", "8080"))
 OS_MAPS_API_KEY = os.environ.get("OS_MAPS_API_KEY", "").strip()
-TILE_RE = re.compile(r"^/api/tiles/(Leisure|Outdoor|Road|Light)/(\\d{1,2})/(\\d{1,7})/(\\d{1,7})\\.png$")
+TILE_RE = re.compile(r"^/api/tiles/(Leisure|Outdoor|Road|Light)/(\d{1,2})/(\d{1,7})/(\d{1,7})\.png$")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -94,7 +94,6 @@ class Handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(data)
             except urllib.error.HTTPError as exc:
-                # Do not leak the key or upstream URL in the response.
                 status = 502 if exc.code not in (429,) else 503
                 self.send_error(status, "OS Maps tile request was rejected")
             except (urllib.error.URLError, TimeoutError, OSError):
@@ -104,7 +103,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404, "Not found")
 
     def log_message(self, fmt, *args):
-        # Never log query strings or secrets.
         super().log_message(fmt, *args)
 
 
