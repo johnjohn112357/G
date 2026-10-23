@@ -56,10 +56,30 @@ def calculate(path, d):
     if path == "/api/calculate/mechanical-power":
         torque, rpm = number(d,"torque_nm",0), number(d,"rpm",0)
         return {"power_w":torque*2*math.pi*rpm/60}
+    if path == "/api/calculate/battery-runtime":
+        capacity, current = number(d,"capacity_ah",0), number(d,"current_a",0)
+        if current <= 0: raise ValueError("current_a must be greater than zero")
+        return {"ideal_runtime_hours":capacity/current,"capacity_ah":capacity,"current_a":current,
+                "caveat":"Ideal estimate; real runtime depends on usable capacity, load, temperature, ageing and BMS cut-off."}
+    if path == "/api/calculate/kinetic-energy":
+        mass, speed = number(d,"mass_kg",0), number(d,"speed_kmh",0)
+        speed_ms = speed / 3.6
+        return {"kinetic_energy_j":0.5*mass*speed_ms**2,"mass_kg":mass,"speed_kmh":speed}
+    if path == "/api/calculate/torque-from-power":
+        power, rpm = number(d,"power_w",0), number(d,"rpm",0)
+        if rpm <= 0: raise ValueError("rpm must be greater than zero")
+        return {"torque_nm":power/(2*math.pi*rpm/60),"power_w":power,"rpm":rpm}
+    if path == "/api/calculate/gear-ratio":
+        input_rpm, output_rpm = number(d,"input_rpm",0), number(d,"output_rpm",0)
+        if output_rpm <= 0: raise ValueError("output_rpm must be greater than zero")
+        return {"reduction_ratio":input_rpm/output_rpm,"input_rpm":input_rpm,"output_rpm":output_rpm}
+    if path == "/api/calculate/wheel-circumference":
+        diameter = number(d,"wheel_diameter_mm",0)
+        return {"circumference_mm":math.pi*diameter,"circumference_m":math.pi*diameter/1000}
     raise KeyError(path)
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ResearchEngineeringToolkit/3.1"
+    server_version = "ResearchEngineeringToolkit/3.2"
     def reply(self, status, obj):
         raw=json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(status); self.send_header("Content-Type","application/json; charset=utf-8")
@@ -94,7 +114,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p=="/health":
                 with db() as c: c.execute("SELECT 1")
-                return self.reply(200,{"status":"ok","version":"3.1","database":"connected"})
+                return self.reply(200,{"status":"ok","version":"3.2","database":"connected"})
             if p=="/api/evidence":
                 with db() as c: rows=c.execute("SELECT * FROM evidence ORDER BY id DESC LIMIT 500").fetchall()
                 return self.reply(200,{"items":[dict(x) for x in rows]})
